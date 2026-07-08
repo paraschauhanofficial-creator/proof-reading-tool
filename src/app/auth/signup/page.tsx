@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import Link from "next/link";
+import Navbar from "@/components/Navbar";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -12,7 +13,6 @@ export default function SignupPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
   const supabase = createClient();
 
   const handleSignup = async () => {
@@ -20,6 +20,11 @@ export default function SignupPage() {
     setError("");
     if (password !== confirmPassword) {
       setError("Passwords do not match");
+      setLoading(false);
+      return;
+    }
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
       setLoading(false);
       return;
     }
@@ -34,69 +39,135 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-      <div className="w-full max-w-md">
-        <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold text-white mb-2">MedProof AI</h1>
-          <p className="text-gray-400">Medical Journal Proofreading</p>
-        </div>
-        <div className="bg-gray-900 rounded-2xl p-8 border border-gray-800">
-          <h2 className="text-xl font-semibold text-white mb-6">Create account</h2>
-          {error && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
-              {error}
+    <div style={{ minHeight: "100vh", backgroundColor: "var(--bg)" }}>
+      <Navbar showAuth={false} />
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        minHeight: "calc(100vh - 56px)", padding: "24px",
+      }}>
+        <div style={{ width: "100%", maxWidth: "400px" }}>
+
+          {/* Logo */}
+          <div style={{ textAlign: "center", marginBottom: "2rem" }}>
+            <div style={{ fontSize: "22px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "6px" }}>
+              AI<span style={{ color: "var(--accent)" }}>PR</span>
             </div>
-          )}
-          {message && (
-            <div className="mb-4 p-3 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-sm">
-              {message}
-            </div>
-          )}
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                placeholder="you@example.com"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                placeholder="••••••••"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Confirm Password</label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                placeholder="••••••••"
-              />
-            </div>
-            <button
-              onClick={handleSignup}
-              disabled={loading}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium py-3 rounded-lg transition-colors"
-            >
-              {loading ? "Creating account..." : "Create account"}
-            </button>
+            <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
+              AI-Powered Document Proofreading
+            </p>
           </div>
-          <p className="mt-6 text-center text-gray-400 text-sm">
-            Already have an account?{" "}
-            <Link href="/auth/login" className="text-blue-400 hover:text-blue-300">
-              Sign in
-            </Link>
-          </p>
+
+          {/* Card */}
+          <div style={{
+            backgroundColor: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            borderRadius: "16px",
+            padding: "32px",
+          }}>
+            <h2 style={{ fontSize: "17px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "24px" }}>
+              Create your account
+            </h2>
+
+            {error && (
+              <div style={{
+                backgroundColor: "rgba(239,68,68,0.08)",
+                border: "1px solid rgba(239,68,68,0.2)",
+                borderRadius: "8px", padding: "10px 14px",
+                fontSize: "13px", color: "#f87171", marginBottom: "16px",
+              }}>
+                {error}
+              </div>
+            )}
+
+            {message && (
+              <div style={{
+                backgroundColor: "rgba(34,197,94,0.08)",
+                border: "1px solid rgba(34,197,94,0.2)",
+                borderRadius: "8px", padding: "10px 14px",
+                fontSize: "13px", color: "#4ade80", marginBottom: "16px",
+              }}>
+                {message}
+              </div>
+            )}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  style={{
+                    width: "100%", backgroundColor: "var(--bg)",
+                    border: "1px solid var(--border)", borderRadius: "8px",
+                    padding: "10px 14px", fontSize: "14px",
+                    color: "var(--text-primary)", outline: "none",
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  style={{
+                    width: "100%", backgroundColor: "var(--bg)",
+                    border: "1px solid var(--border)", borderRadius: "8px",
+                    padding: "10px 14px", fontSize: "14px",
+                    color: "var(--text-primary)", outline: "none",
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
+                  Confirm password
+                </label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSignup()}
+                  placeholder="••••••••"
+                  style={{
+                    width: "100%", backgroundColor: "var(--bg)",
+                    border: "1px solid var(--border)", borderRadius: "8px",
+                    padding: "10px 14px", fontSize: "14px",
+                    color: "var(--text-primary)", outline: "none",
+                  }}
+                />
+              </div>
+
+              <button
+                onClick={handleSignup}
+                disabled={loading}
+                style={{
+                  width: "100%", backgroundColor: "var(--accent)",
+                  color: "#fff", border: "none", borderRadius: "8px",
+                  padding: "11px", fontSize: "14px", fontWeight: 500,
+                  cursor: loading ? "not-allowed" : "pointer",
+                  opacity: loading ? 0.7 : 1, marginTop: "4px",
+                }}
+              >
+                {loading ? "Creating account..." : "Create account"}
+              </button>
+            </div>
+
+            <p style={{ textAlign: "center", fontSize: "13px", color: "var(--text-muted)", marginTop: "20px" }}>
+              Already have an account?{" "}
+              <Link href="/auth/login" style={{ color: "var(--accent)", textDecoration: "none", fontWeight: 500 }}>
+                Sign in
+              </Link>
+            </p>
+          </div>
         </div>
       </div>
     </div>
