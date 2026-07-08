@@ -15,7 +15,7 @@ export default function HomePage() {
           borderRadius: "20px", border: "1px solid var(--accent-border)",
           marginBottom: "2rem",
         }}>
-          Medical Journal Proofreading
+          AI-Powered Document Proofreading
         </div>
 
         <h1 style={{
@@ -30,7 +30,7 @@ export default function HomePage() {
           fontSize: "16px", color: "var(--text-secondary)",
           lineHeight: 1.7, maxWidth: "480px", margin: "0 auto 2.5rem",
         }}>
-          MedProof AI applies a 7-pass editorial pipeline — grammar, APA style,
+          AIPR applies a 7-pass editorial pipeline — grammar, APA style,
           medical terminology, and tracked changes — so your paper reads like it
           was edited by an expert.
         </p>
@@ -118,7 +118,7 @@ export default function HomePage() {
         display: "flex", justifyContent: "space-between", alignItems: "center",
         flexWrap: "wrap", gap: "12px",
       }}>
-        <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--text-muted)" }}>MedProof AI</div>
+        <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--text-muted)" }}>AIPR</div>
         <div style={{ display: "flex", gap: "24px" }}>
           {["Privacy", "Terms", "Contact"].map((l) => (
             <a key={l} href="#" style={{ fontSize: "12px", color: "var(--text-muted)", textDecoration: "none" }}>{l}</a>

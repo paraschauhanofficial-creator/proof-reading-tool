@@ -89,7 +89,7 @@ const filePath = `${user.id}/${Date.now()}_${sanitizedName || "manuscript.docx"}
     <div className="min-h-screen bg-gray-950">
       {/* Header */}
       <header className="border-b border-gray-800 px-6 py-4 flex justify-between items-center">
-        <h1 className="text-xl font-bold text-white">MedProof AI</h1>
+        <h1 className="text-xl font-bold text-white">AIPR</h1>
         <div className="flex items-center gap-4">
           <span className="text-gray-400 text-sm">{user?.email}</span>
           <button

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MedProof AI — Medical Journal Proofreading",
+  title: "AIPR — AI-Powered Document Proofreading",
   description: "Publication-ready manuscripts with 7-pass AI proofreading",
 };
 

@@ -59,7 +59,7 @@ export default function Navbar({ showAuth = true }: { showAuth?: boolean }) {
         {/* Logo */}
         <Link href="/" style={{ textDecoration: "none" }}>
           <span style={{ fontSize: "15px", fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.3px" }}>
-            MedProof <span style={{ color: "var(--accent)" }}>AI</span>
+            AI<span style={{ color: "var(--accent)" }}>PR</span>
           </span>
         </Link>
 

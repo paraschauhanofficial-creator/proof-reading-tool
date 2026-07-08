@@ -116,7 +116,7 @@ export default function ManuscriptPage() {
     <div className="min-h-screen bg-gray-950">
       {/* Header */}
       <header className="border-b border-gray-800 px-6 py-4 flex justify-between items-center">
-        <h1 className="text-xl font-bold text-white">MedProof AI</h1>
+        <h1 className="text-xl font-bold text-white">AIPR</h1>
         <button
           onClick={() => router.push("/dashboard")}
           className="text-sm text-gray-400 hover:text-white transition-colors"
