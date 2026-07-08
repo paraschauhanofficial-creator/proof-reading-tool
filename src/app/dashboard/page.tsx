@@ -178,8 +178,8 @@ export default function DashboardPage() {
 
   const monthlyData = getMonthlyData();
 
-  // Show last 3 months + current
-  const monthsToShow = [-2, -1, 0].map((offset) => {
+  // Show only previous month + current month
+    const monthsToShow = [-1, 0].map((offset) => {
     let month = currentMonth + offset;
     let year = currentYear;
     if (month < 0) { month += 12; year -= 1; }
