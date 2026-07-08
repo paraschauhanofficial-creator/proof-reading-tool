@@ -101,6 +101,17 @@ export default function Navbar({ showAuth = true }: { showAuth?: boolean }) {
                   }}>
                     Dashboard
                   </Link>
+                  <Link href="/records" style={{
+                    fontSize: "13px",
+                    color: "var(--text-secondary)",
+                    textDecoration: "none",
+                    padding: "7px 14px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border)",
+                    backgroundColor: "var(--bg-card)",
+                    }}>
+                    Records
+                  </Link>
                   <button
                     onClick={handleSignOut}
                     style={{
