@@ -13,8 +13,9 @@ export default function DashboardPage() {
   const [showModal, setShowModal] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [deliveryDate, setDeliveryDate] = useState("");
+  const [incomingDate, setIncomingDate] = useState("");
   const [notes, setNotes] = useState("");
-  const [wordCount, setWordCount] = useState<number>(0);
+  const [wordCount, setWordCount] = useState<string>("");
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const router = useRouter();
   const supabase = createClient();
@@ -42,16 +43,16 @@ export default function DashboardPage() {
       alert("Please upload a .docx file");
       return;
     }
-    // Count words from file in browser
     try {
       const mammoth = await import("mammoth");
       const arrayBuffer = await file.arrayBuffer();
       const { value } = await mammoth.extractRawText({ arrayBuffer });
       const count = value.trim().split(/\s+/).filter(Boolean).length;
-      setWordCount(count);
+      setWordCount(count.toString());
     } catch {
-      setWordCount(0);
+      setWordCount("");
     }
+    setIncomingDate(new Date().toISOString().split("T")[0]);
     setPendingFile(file);
     setShowModal(true);
   };
@@ -91,7 +92,8 @@ export default function DashboardPage() {
         original_file_url: filePath,
         status: "pending",
         delivery_date: deliveryDate || null,
-        word_count: wordCount,
+        incoming_date: incomingDate || null,
+        word_count: parseInt(wordCount) || 0,
         notes: notes || null,
       })
       .select()
@@ -100,45 +102,41 @@ export default function DashboardPage() {
     setUploading(false);
     setPendingFile(null);
     setDeliveryDate("");
+    setIncomingDate("");
     setNotes("");
-    setWordCount(0);
+    setWordCount("");
     fetchManuscripts();
     if (manuscript) router.push(`/manuscript/${manuscript.id}`);
   };
 
   const handleDelete = async (id: string, fileUrl: string) => {
-  try {
-    // Delete file from storage
-    const { error: storageError } = await supabase.storage
-      .from("manuscripts")
-      .remove([fileUrl]);
-    
-    if (storageError) console.error("Storage delete error:", storageError);
+    try {
+      console.log("Deleting file path:", fileUrl);
 
-    // Delete record from DB
-    const { error: dbError } = await supabase
-      .from("manuscripts")
-      .delete()
-      .eq("id", id);
+      const { error: storageError } = await supabase.storage
+        .from("manuscripts")
+        .remove([fileUrl]);
 
-    if (dbError) {
-      console.error("DB delete error:", dbError);
-      alert("Delete failed: " + dbError.message);
-      return;
+      if (storageError) console.error("Storage error:", storageError.message);
+
+      const { error: dbError } = await supabase
+        .from("manuscripts")
+        .delete()
+        .eq("id", id);
+
+      if (dbError) {
+        alert("Delete failed: " + dbError.message);
+        return;
+      }
+
+      sessionStorage.removeItem(`result_${id}`);
+      sessionStorage.removeItem(`text_${id}`);
+      setDeleteConfirm(null);
+      setManuscripts((prev) => prev.filter((m) => m.id !== id));
+    } catch (error: any) {
+      alert("Delete failed: " + error.message);
     }
-
-    // Clear session cache
-    sessionStorage.removeItem(`result_${id}`);
-    sessionStorage.removeItem(`text_${id}`);
-    setDeleteConfirm(null);
-    
-    // Update local state immediately
-    setManuscripts((prev) => prev.filter((m) => m.id !== id));
-  } catch (error: any) {
-    console.error("Delete error:", error);
-    alert("Delete failed: " + error.message);
-  }
-};
+  };
 
   const statusConfig: any = {
     pending: { label: "Pending", color: "#f59e0b", bg: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.2)" },
@@ -155,7 +153,7 @@ export default function DashboardPage() {
       {/* Upload Details Modal */}
       {showModal && (
         <div style={{
-          position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)",
+          position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.6)",
           display: "flex", alignItems: "center", justifyContent: "center",
           zIndex: 100, padding: "20px",
         }}>
@@ -163,74 +161,90 @@ export default function DashboardPage() {
             backgroundColor: "var(--bg-card)", border: "1px solid var(--border)",
             borderRadius: "16px", padding: "28px", width: "100%", maxWidth: "440px",
           }}>
-            <h3 style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "6px" }}>
+            <h3 style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
               Document details
             </h3>
-            <p style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "24px" }}>
+            <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "24px" }}>
               {pendingFile?.name}
             </p>
 
-            {/* Word count — auto detected */}
-            <div style={{
-              display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px",
-              marginBottom: "16px",
-            }}>
-              <div style={{
-                backgroundColor: "var(--bg)", border: "1px solid var(--border)",
-                borderRadius: "10px", padding: "12px", textAlign: "center",
-              }}>
-                <p style={{ fontSize: "22px", fontWeight: 700, color: "var(--text-primary)" }}>
-                  {wordCount.toLocaleString()}
-                </p>
-                <p style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Word count</p>
-              </div>
-              <div style={{
-                backgroundColor: "var(--bg)", border: "1px solid var(--border)",
-                borderRadius: "10px", padding: "12px", textAlign: "center",
-              }}>
-                <p style={{ fontSize: "22px", fontWeight: 700, color: "var(--text-primary)" }}>
-                  {new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
-                </p>
-                <p style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Date added</p>
-              </div>
-            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginBottom: "20px" }}>
 
-            {/* Delivery date */}
-            <div style={{ marginBottom: "14px" }}>
-              <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
-                Delivery date (optional)
-              </label>
-              <input
-                type="date"
-                value={deliveryDate}
-                onChange={(e) => setDeliveryDate(e.target.value)}
-                style={{
-                  width: "100%", backgroundColor: "var(--bg)",
-                  border: "1px solid var(--border)", borderRadius: "8px",
-                  padding: "10px 14px", fontSize: "13px",
-                  color: "var(--text-primary)", outline: "none",
-                }}
-              />
-            </div>
+              {/* Word count */}
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
+                  Word count
+                </label>
+                <input
+                  type="number"
+                  value={wordCount}
+                  onChange={(e) => setWordCount(e.target.value)}
+                  placeholder="Auto-detected — edit if needed"
+                  style={{
+                    width: "100%", backgroundColor: "var(--bg)",
+                    border: "1px solid var(--border)", borderRadius: "8px",
+                    padding: "10px 14px", fontSize: "13px",
+                    color: "var(--text-primary)", outline: "none",
+                  }}
+                />
+              </div>
 
-            {/* Notes */}
-            <div style={{ marginBottom: "24px" }}>
-              <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
-                Notes (optional)
-              </label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="e.g. Target journal, special instructions..."
-                rows={3}
-                style={{
-                  width: "100%", backgroundColor: "var(--bg)",
-                  border: "1px solid var(--border)", borderRadius: "8px",
-                  padding: "10px 14px", fontSize: "13px",
-                  color: "var(--text-primary)", outline: "none",
-                  resize: "none", fontFamily: "inherit",
-                }}
-              />
+              {/* Incoming date */}
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
+                  Incoming date
+                </label>
+                <input
+                  type="date"
+                  value={incomingDate}
+                  onChange={(e) => setIncomingDate(e.target.value)}
+                  style={{
+                    width: "100%", backgroundColor: "var(--bg)",
+                    border: "1px solid var(--border)", borderRadius: "8px",
+                    padding: "10px 14px", fontSize: "13px",
+                    color: "var(--text-primary)", outline: "none",
+                  }}
+                />
+              </div>
+
+              {/* Delivery date */}
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
+                  Delivery date
+                </label>
+                <input
+                  type="date"
+                  value={deliveryDate}
+                  onChange={(e) => setDeliveryDate(e.target.value)}
+                  style={{
+                    width: "100%", backgroundColor: "var(--bg)",
+                    border: "1px solid var(--border)", borderRadius: "8px",
+                    padding: "10px 14px", fontSize: "13px",
+                    color: "var(--text-primary)", outline: "none",
+                  }}
+                />
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
+                  Notes (optional)
+                </label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. Target journal, special instructions..."
+                  rows={3}
+                  style={{
+                    width: "100%", backgroundColor: "var(--bg)",
+                    border: "1px solid var(--border)", borderRadius: "8px",
+                    padding: "10px 14px", fontSize: "13px",
+                    color: "var(--text-primary)", outline: "none",
+                    resize: "none", fontFamily: "inherit",
+                  }}
+                />
+              </div>
+
             </div>
 
             <div style={{ display: "flex", gap: "10px" }}>
@@ -262,7 +276,7 @@ export default function DashboardPage() {
       {/* Delete Confirm Modal */}
       {deleteConfirm && (
         <div style={{
-          position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)",
+          position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.6)",
           display: "flex", alignItems: "center", justifyContent: "center",
           zIndex: 100, padding: "20px",
         }}>
@@ -331,7 +345,7 @@ export default function DashboardPage() {
             border: `2px dashed ${dragOver ? "var(--accent)" : "var(--border)"}`,
             borderRadius: "16px", padding: "48px 24px", textAlign: "center",
             backgroundColor: dragOver ? "var(--accent-light)" : "var(--bg-card)",
-            transition: "all 0.2s ease", marginBottom: "40px", cursor: "pointer",
+            transition: "all 0.2s ease", marginBottom: "40px",
           }}
         >
           <div style={{ fontSize: "36px", marginBottom: "12px" }}>📄</div>
@@ -382,12 +396,12 @@ export default function DashboardPage() {
                     backgroundColor: "var(--bg-card)", border: "1px solid var(--border)",
                     borderRadius: "12px", padding: "14px 18px",
                     display: "flex", alignItems: "center", justifyContent: "space-between",
-                    gap: "12px", transition: "border-color 0.15s",
+                    gap: "12px",
                   }}
                     onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
                     onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
                   >
-                    {/* Left — clickable area */}
+                    {/* Left — clickable */}
                     <div
                       onClick={() => router.push(`/manuscript/${m.id}`)}
                       style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1, minWidth: 0, cursor: "pointer" }}
@@ -404,12 +418,14 @@ export default function DashboardPage() {
                           marginBottom: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                         }}>{m.title}</p>
                         <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
-                          <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                            Added {new Date(m.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
-                          </span>
+                          {m.incoming_date && (
+                            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                              In: {new Date(m.incoming_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                            </span>
+                          )}
                           {m.delivery_date && (
                             <span style={{ fontSize: "11px", color: "#f59e0b" }}>
-                              Due {new Date(m.delivery_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                              Due: {new Date(m.delivery_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
                             </span>
                           )}
                           {m.word_count > 0 && (
@@ -434,7 +450,6 @@ export default function DashboardPage() {
                           background: "transparent", border: "1px solid var(--border)",
                           borderRadius: "6px", padding: "4px 8px", cursor: "pointer",
                           fontSize: "14px", color: "var(--text-muted)",
-                          transition: "all 0.15s",
                         }}
                         onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ef4444"; e.currentTarget.style.color = "#ef4444"; }}
                         onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-muted)"; }}
@@ -442,8 +457,10 @@ export default function DashboardPage() {
                       >
                         🗑
                       </button>
-                      <span style={{ fontSize: "16px", color: "var(--text-muted)", cursor: "pointer" }}
-                        onClick={() => router.push(`/manuscript/${m.id}`)}>→</span>
+                      <span
+                        onClick={() => router.push(`/manuscript/${m.id}`)}
+                        style={{ fontSize: "16px", color: "var(--text-muted)", cursor: "pointer" }}
+                      >→</span>
                     </div>
                   </div>
                 );

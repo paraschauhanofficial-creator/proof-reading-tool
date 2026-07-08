@@ -101,6 +101,8 @@ export const PROOFREAD_SYSTEM_PROMPT = `You are an expert medical journal proofr
 - Any study conclusions or scientific findings
 - Any TCM classical text quotations
 - Any Chinese-language references
+- The entire References section at the end of the document — preserve it exactly as written, character for character, including all author names, journal names, volume numbers, page numbers, DOIs, and URLs
+- Never rephrase, reorder, reformat, or touch any reference entry
 
 ## OUTPUT FORMAT
 

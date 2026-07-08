@@ -66,9 +66,13 @@ export default function ManuscriptPage() {
 
   // Load result from sessionStorage on mount
   useEffect(() => {
+  try {
     const cached = sessionStorage.getItem(`result_${params.id}`);
     if (cached) setResult(JSON.parse(cached));
-  }, [params.id]);
+  } catch {
+    sessionStorage.removeItem(`result_${params.id}`);
+  }
+}, [params.id]);
 
   const startTagCycle = () => {
     tagInterval.current = setInterval(() => {
