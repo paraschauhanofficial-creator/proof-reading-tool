@@ -39,23 +39,17 @@ export default function DashboardPage() {
   };
 
   const handleFilePicked = async (file: File) => {
-    if (!file.name.endsWith(".docx")) {
-      alert("Please upload a .docx file");
-      return;
-    }
-    try {
-      const mammoth = await import("mammoth");
-      const arrayBuffer = await file.arrayBuffer();
-      const { value } = await mammoth.extractRawText({ arrayBuffer });
-      const count = value.trim().split(/\s+/).filter(Boolean).length;
-      setWordCount(count.toString());
-    } catch {
-      setWordCount("");
-    }
-    setIncomingDate(new Date().toISOString().split("T")[0]);
-    setPendingFile(file);
-    setShowModal(true);
-  };
+  if (!file.name.endsWith(".docx")) {
+    alert("Please upload a .docx file");
+    return;
+  }
+  setWordCount("");
+  setIncomingDate("");
+  setDeliveryDate("");
+  setNotes("");
+  setPendingFile(file);
+  setShowModal(true);
+};
 
   const handleUpload = async () => {
     if (!pendingFile) return;
