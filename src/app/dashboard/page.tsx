@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import Navbar from "@/components/Navbar";
 
-const DEFAULT_RATE = 570; // ₹ per 1000 words
+const DEFAULT_RATE = 570;
 
 function getMonthName(year: number, month: number) {
   return new Date(year, month, 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
@@ -30,6 +30,7 @@ export default function DashboardPage() {
   const [rate, setRate] = useState<number>(DEFAULT_RATE);
   const [editingRate, setEditingRate] = useState(false);
   const [rateInput, setRateInput] = useState<string>(DEFAULT_RATE.toString());
+  const [showCalculator, setShowCalculator] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
@@ -45,13 +46,8 @@ export default function DashboardPage() {
     };
     getUser();
     fetchManuscripts();
-
-    // Load saved rate
     const savedRate = localStorage.getItem("aipr_rate");
-    if (savedRate) {
-      setRate(parseFloat(savedRate));
-      setRateInput(savedRate);
-    }
+    if (savedRate) { setRate(parseFloat(savedRate)); setRateInput(savedRate); }
   }, []);
 
   const fetchManuscripts = async () => {
@@ -63,106 +59,61 @@ export default function DashboardPage() {
   };
 
   const handleFilePicked = async (file: File) => {
-    if (!file.name.endsWith(".docx")) {
-      alert("Please upload a .docx file");
-      return;
-    }
-    setWordCount("");
-    setIncomingDate("");
-    setDeliveryDate("");
-    setNotes("");
-    setPendingFile(file);
-    setShowModal(true);
+    if (!file.name.endsWith(".docx")) { alert("Please upload a .docx file"); return; }
+    setWordCount(""); setIncomingDate(""); setDeliveryDate(""); setNotes("");
+    setPendingFile(file); setShowModal(true);
   };
 
   const handleUpload = async () => {
     if (!pendingFile) return;
-    setUploading(true);
-    setShowModal(false);
-
+    setUploading(true); setShowModal(false);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     const sanitizedName = pendingFile.name
-      .replace(/[^\x00-\x7F]/g, "")
-      .replace(/\s+/g, "_")
-      .replace(/[()]/g, "")
-      .replace(/_+/g, "_")
-      .replace(/^_|_$/g, "");
+      .replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, "_")
+      .replace(/[()]/g, "").replace(/_+/g, "_").replace(/^_|_$/g, "");
 
     const filePath = `${user.id}/${Date.now()}_${sanitizedName || "manuscript.docx"}`;
+    const { error: uploadError } = await supabase.storage.from("manuscripts").upload(filePath, pendingFile);
 
-    const { error: uploadError } = await supabase.storage
-      .from("manuscripts")
-      .upload(filePath, pendingFile);
+    if (uploadError) { alert("Upload failed: " + uploadError.message); setUploading(false); return; }
 
-    if (uploadError) {
-      alert("Upload failed: " + uploadError.message);
-      setUploading(false);
-      return;
-    }
+    const { data: manuscript } = await supabase.from("manuscripts").insert({
+      user_id: user.id,
+      title: pendingFile.name.replace(".docx", ""),
+      original_file_url: filePath,
+      status: "pending",
+      delivery_date: deliveryDate || null,
+      incoming_date: incomingDate || null,
+      word_count: parseInt(wordCount) || 0,
+      notes: notes || null,
+    }).select().single();
 
-    const { data: manuscript } = await supabase
-      .from("manuscripts")
-      .insert({
-        user_id: user.id,
-        title: pendingFile.name.replace(".docx", ""),
-        original_file_url: filePath,
-        status: "pending",
-        delivery_date: deliveryDate || null,
-        incoming_date: incomingDate || null,
-        word_count: parseInt(wordCount) || 0,
-        notes: notes || null,
-      })
-      .select()
-      .single();
-
-    setUploading(false);
-    setPendingFile(null);
-    setDeliveryDate("");
-    setIncomingDate("");
-    setNotes("");
-    setWordCount("");
+    setUploading(false); setPendingFile(null);
+    setDeliveryDate(""); setIncomingDate(""); setNotes(""); setWordCount("");
     fetchManuscripts();
     if (manuscript) router.push(`/manuscript/${manuscript.id}`);
   };
 
   const handleDelete = async (id: string, fileUrl: string) => {
     try {
-      const { error: storageError } = await supabase.storage
-        .from("manuscripts")
-        .remove([fileUrl]);
-      if (storageError) console.error("Storage error:", storageError.message);
-
-      const { error: dbError } = await supabase
-        .from("manuscripts")
-        .delete()
-        .eq("id", id);
-
-      if (dbError) {
-        alert("Delete failed: " + dbError.message);
-        return;
-      }
-
+      await supabase.storage.from("manuscripts").remove([fileUrl]);
+      const { error: dbError } = await supabase.from("manuscripts").delete().eq("id", id);
+      if (dbError) { alert("Delete failed: " + dbError.message); return; }
       sessionStorage.removeItem(`result_${id}`);
       sessionStorage.removeItem(`text_${id}`);
       setDeleteConfirm(null);
       setManuscripts((prev) => prev.filter((m) => m.id !== id));
-    } catch (error: any) {
-      alert("Delete failed: " + error.message);
-    }
+    } catch (error: any) { alert("Delete failed: " + error.message); }
   };
 
   const saveRate = () => {
     const val = parseFloat(rateInput);
-    if (!isNaN(val) && val > 0) {
-      setRate(val);
-      localStorage.setItem("aipr_rate", val.toString());
-    }
+    if (!isNaN(val) && val > 0) { setRate(val); localStorage.setItem("aipr_rate", val.toString()); }
     setEditingRate(false);
   };
 
-  // Group manuscripts by delivery month
   const getMonthlyData = () => {
     const months: Record<string, { words: number; docs: number }> = {};
     manuscripts.forEach((m) => {
@@ -177,9 +128,7 @@ export default function DashboardPage() {
   };
 
   const monthlyData = getMonthlyData();
-
-  // Show only previous month + current month
-    const monthsToShow = [-1, 0].map((offset) => {
+  const monthsToShow = [-1, 0].map((offset) => {
     let month = currentMonth + offset;
     let year = currentYear;
     if (month < 0) { month += 12; year -= 1; }
@@ -197,6 +146,12 @@ export default function DashboardPage() {
     error: { label: "Error", color: "#f87171", bg: "rgba(248,113,113,0.1)", border: "rgba(248,113,113,0.2)" },
   };
 
+  const inputStyle: React.CSSProperties = {
+    width: "100%", backgroundColor: "var(--bg)", border: "1px solid var(--border)",
+    borderRadius: "8px", padding: "10px 14px", fontSize: "13px",
+    color: "var(--text-primary)", outline: "none", boxSizing: "border-box",
+  };
+
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "var(--bg)" }}>
       <Navbar />
@@ -206,16 +161,17 @@ export default function DashboardPage() {
         <div style={{
           position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.6)",
           display: "flex", alignItems: "center", justifyContent: "center",
-          zIndex: 100, padding: "20px",
+          zIndex: 100, padding: "16px",
         }}>
           <div style={{
             backgroundColor: "var(--bg-card)", border: "1px solid var(--border)",
-            borderRadius: "16px", padding: "28px", width: "100%", maxWidth: "440px",
+            borderRadius: "16px", padding: "clamp(20px, 4vw, 28px)",
+            width: "100%", maxWidth: "440px", maxHeight: "90vh", overflowY: "auto",
           }}>
             <h3 style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
               Document details
             </h3>
-            <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "24px" }}>
+            <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "20px" }}>
               {pendingFile?.name}
             </p>
 
@@ -224,83 +180,42 @@ export default function DashboardPage() {
                 <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
                   English word count
                 </label>
-                <input
-                  type="number"
-                  value={wordCount}
-                  onChange={(e) => setWordCount(e.target.value)}
-                  placeholder="Enter word count"
-                  style={{
-                    width: "100%", backgroundColor: "var(--bg)",
-                    border: "1px solid var(--border)", borderRadius: "8px",
-                    padding: "10px 14px", fontSize: "13px",
-                    color: "var(--text-primary)", outline: "none",
-                  }}
-                />
+                <input type="number" value={wordCount} onChange={(e) => setWordCount(e.target.value)}
+                  placeholder="Enter word count" style={inputStyle} />
               </div>
 
-              <div>
-                <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
-                  Receiving date
-                </label>
-                <input
-                  type="date"
-                  value={incomingDate}
-                  onChange={(e) => setIncomingDate(e.target.value)}
-                  style={{
-                    width: "100%", backgroundColor: "var(--bg)",
-                    border: "1px solid var(--border)", borderRadius: "8px",
-                    padding: "10px 14px", fontSize: "13px",
-                    color: "var(--text-primary)", outline: "none",
-                  }}
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
-                  Delivery date
-                </label>
-                <input
-                  type="date"
-                  value={deliveryDate}
-                  onChange={(e) => setDeliveryDate(e.target.value)}
-                  style={{
-                    width: "100%", backgroundColor: "var(--bg)",
-                    border: "1px solid var(--border)", borderRadius: "8px",
-                    padding: "10px 14px", fontSize: "13px",
-                    color: "var(--text-primary)", outline: "none",
-                  }}
-                />
+              {/* Dates row — side by side on desktop, stacked on mobile */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "12px" }}>
+                <div>
+                  <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
+                    Receiving date
+                  </label>
+                  <input type="date" value={incomingDate} onChange={(e) => setIncomingDate(e.target.value)} style={inputStyle} />
+                </div>
+                <div>
+                  <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
+                    Delivery date
+                  </label>
+                  <input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} style={inputStyle} />
+                </div>
               </div>
 
               <div>
                 <label style={{ fontSize: "12px", fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: "6px" }}>
                   Remarks / Contents / Project
                 </label>
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="e.g. 7-10 booked trans 4 docs - Doc 3"
-                  rows={3}
-                  style={{
-                    width: "100%", backgroundColor: "var(--bg)",
-                    border: "1px solid var(--border)", borderRadius: "8px",
-                    padding: "10px 14px", fontSize: "13px",
-                    color: "var(--text-primary)", outline: "none",
-                    resize: "none", fontFamily: "inherit",
-                  }}
-                />
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. 7-10 booked trans 4 docs - Doc 3" rows={3}
+                  style={{ ...inputStyle, resize: "none", fontFamily: "inherit" }} />
               </div>
 
-              {/* Rate preview */}
               {wordCount && (
                 <div style={{
                   backgroundColor: "var(--accent-light)", border: "1px solid var(--accent-border)",
                   borderRadius: "8px", padding: "10px 14px",
                   display: "flex", justifyContent: "space-between", alignItems: "center",
                 }}>
-                  <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                    Estimated payout
-                  </span>
+                  <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Estimated payout</span>
                   <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--accent)" }}>
                     ₹{calcPayout(parseInt(wordCount) || 0, rate)}
                   </span>
@@ -309,26 +224,16 @@ export default function DashboardPage() {
             </div>
 
             <div style={{ display: "flex", gap: "10px" }}>
-              <button
-                onClick={() => { setShowModal(false); setPendingFile(null); }}
-                style={{
-                  flex: 1, fontSize: "13px", fontWeight: 500, padding: "10px",
-                  borderRadius: "8px", border: "1px solid var(--border)",
-                  backgroundColor: "var(--bg)", color: "var(--text-secondary)", cursor: "pointer",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleUpload}
-                style={{
-                  flex: 2, fontSize: "13px", fontWeight: 500, padding: "10px",
-                  borderRadius: "8px", border: "none",
-                  backgroundColor: "var(--accent)", color: "#fff", cursor: "pointer",
-                }}
-              >
-                Upload and start
-              </button>
+              <button onClick={() => { setShowModal(false); setPendingFile(null); }} style={{
+                flex: 1, fontSize: "13px", fontWeight: 500, padding: "10px",
+                borderRadius: "8px", border: "1px solid var(--border)",
+                backgroundColor: "var(--bg)", color: "var(--text-secondary)", cursor: "pointer",
+              }}>Cancel</button>
+              <button onClick={handleUpload} style={{
+                flex: 2, fontSize: "13px", fontWeight: 500, padding: "10px",
+                borderRadius: "8px", border: "none",
+                backgroundColor: "var(--accent)", color: "#fff", cursor: "pointer",
+              }}>Upload and start</button>
             </div>
           </div>
         </div>
@@ -339,12 +244,12 @@ export default function DashboardPage() {
         <div style={{
           position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.6)",
           display: "flex", alignItems: "center", justifyContent: "center",
-          zIndex: 100, padding: "20px",
+          zIndex: 100, padding: "16px",
         }}>
           <div style={{
             backgroundColor: "var(--bg-card)", border: "1px solid var(--border)",
-            borderRadius: "16px", padding: "28px", width: "100%", maxWidth: "380px",
-            textAlign: "center",
+            borderRadius: "16px", padding: "clamp(20px, 4vw, 28px)",
+            width: "100%", maxWidth: "380px", textAlign: "center",
           }}>
             <div style={{ fontSize: "32px", marginBottom: "12px" }}>🗑️</div>
             <h3 style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "8px" }}>
@@ -354,46 +259,51 @@ export default function DashboardPage() {
               This will permanently delete the document and all associated data.
             </p>
             <div style={{ display: "flex", gap: "10px" }}>
-              <button
-                onClick={() => setDeleteConfirm(null)}
-                style={{
-                  flex: 1, fontSize: "13px", fontWeight: 500, padding: "10px",
-                  borderRadius: "8px", border: "1px solid var(--border)",
-                  backgroundColor: "var(--bg)", color: "var(--text-secondary)", cursor: "pointer",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  const m = manuscripts.find(m => m.id === deleteConfirm);
-                  if (m) handleDelete(m.id, m.original_file_url);
-                }}
-                style={{
-                  flex: 1, fontSize: "13px", fontWeight: 500, padding: "10px",
-                  borderRadius: "8px", border: "none",
-                  backgroundColor: "#ef4444", color: "#fff", cursor: "pointer",
-                }}
-              >
-                Delete
-              </button>
+              <button onClick={() => setDeleteConfirm(null)} style={{
+                flex: 1, fontSize: "13px", fontWeight: 500, padding: "10px",
+                borderRadius: "8px", border: "1px solid var(--border)",
+                backgroundColor: "var(--bg)", color: "var(--text-secondary)", cursor: "pointer",
+              }}>Cancel</button>
+              <button onClick={() => {
+                const m = manuscripts.find(m => m.id === deleteConfirm);
+                if (m) handleDelete(m.id, m.original_file_url);
+              }} style={{
+                flex: 1, fontSize: "13px", fontWeight: 500, padding: "10px",
+                borderRadius: "8px", border: "none",
+                backgroundColor: "#ef4444", color: "#fff", cursor: "pointer",
+              }}>Delete</button>
             </div>
           </div>
         </div>
       )}
 
-      <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "40px 24px" }}>
+      <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "clamp(24px, 5vw, 40px) clamp(16px, 4vw, 24px)" }}>
 
         {/* Header */}
-        <div style={{ marginBottom: "32px" }}>
-          <h1 style={{ fontSize: "22px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
-            Dashboard
-          </h1>
-          <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>{user?.email}</p>
+        <div style={{ marginBottom: "clamp(20px, 4vw, 32px)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
+          <div>
+            <h1 style={{ fontSize: "clamp(18px, 3vw, 22px)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
+              Dashboard
+            </h1>
+            <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>{user?.email}</p>
+          </div>
+          {/* Mobile calculator toggle */}
+          <button
+            onClick={() => setShowCalculator(!showCalculator)}
+            className="aipr-calc-toggle"
+            style={{
+              display: "none", fontSize: "12px", fontWeight: 500,
+              padding: "7px 14px", borderRadius: "8px",
+              border: "1px solid var(--border)", backgroundColor: "var(--bg-card)",
+              color: "var(--text-secondary)", cursor: "pointer",
+            }}
+          >
+            {showCalculator ? "Hide earnings" : "💰 Show earnings"}
+          </button>
         </div>
 
-        {/* Main grid — left docs, right calculator */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: "24px", alignItems: "start" }}>
+        {/* Main layout */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: "24px", alignItems: "start" }} className="aipr-dashboard-grid">
 
           {/* LEFT — Upload + Documents */}
           <div>
@@ -402,23 +312,22 @@ export default function DashboardPage() {
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
               onDrop={(e) => {
-                e.preventDefault();
-                setDragOver(false);
+                e.preventDefault(); setDragOver(false);
                 const file = e.dataTransfer.files[0];
                 if (file) handleFilePicked(file);
               }}
               style={{
                 border: `2px dashed ${dragOver ? "var(--accent)" : "var(--border)"}`,
-                borderRadius: "16px", padding: "36px 24px", textAlign: "center",
-                backgroundColor: dragOver ? "var(--accent-light)" : "var(--bg-card)",
-                transition: "all 0.2s ease", marginBottom: "32px",
+                borderRadius: "16px", padding: "clamp(24px, 4vw, 36px) 24px",
+                textAlign: "center", backgroundColor: dragOver ? "var(--accent-light)" : "var(--bg-card)",
+                transition: "all 0.2s ease", marginBottom: "clamp(20px, 4vw, 32px)",
               }}
             >
               <div style={{ fontSize: "32px", marginBottom: "10px" }}>📄</div>
-              <h2 style={{ fontSize: "15px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "6px" }}>
+              <h2 style={{ fontSize: "clamp(14px, 2vw, 15px)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "6px" }}>
                 Upload your document
               </h2>
-              <p style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "16px" }}>
+              <p style={{ fontSize: "clamp(12px, 1.5vw, 13px)", color: "var(--text-muted)", marginBottom: "16px" }}>
                 Drag and drop a .docx file or click to browse
               </p>
               <label style={{ cursor: "pointer" }}>
@@ -429,18 +338,13 @@ export default function DashboardPage() {
                 }}>
                   {uploading ? "Uploading..." : "Choose file"}
                 </span>
-                <input
-                  type="file" accept=".docx" style={{ display: "none" }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleFilePicked(file);
-                  }}
-                />
+                <input type="file" accept=".docx" style={{ display: "none" }}
+                  onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFilePicked(file); }} />
               </label>
             </div>
 
             {/* Documents list */}
-            {manuscripts.length > 0 && (
+            {manuscripts.length > 0 ? (
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
                   <h2 style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}>
@@ -457,16 +361,17 @@ export default function DashboardPage() {
                     return (
                       <div key={m.id} style={{
                         backgroundColor: "var(--bg-card)", border: "1px solid var(--border)",
-                        borderRadius: "12px", padding: "12px 16px",
+                        borderRadius: "12px", padding: "clamp(10px, 2vw, 12px) clamp(12px, 2vw, 16px)",
                         display: "flex", alignItems: "center", justifyContent: "space-between",
-                        gap: "12px",
+                        gap: "10px", transition: "border-color 0.2s ease",
                       }}
                         onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
                         onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
                       >
+                        {/* Clickable main area */}
                         <div
                           onClick={() => router.push(`/manuscript/${m.id}`)}
-                          style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1, minWidth: 0, cursor: "pointer" }}
+                          style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minWidth: 0, cursor: "pointer" }}
                         >
                           <div style={{
                             width: "32px", height: "32px", borderRadius: "8px",
@@ -476,10 +381,11 @@ export default function DashboardPage() {
                           }}>📄</div>
                           <div style={{ minWidth: 0 }}>
                             <p style={{
-                              fontSize: "13px", fontWeight: 500, color: "var(--text-primary)",
-                              marginBottom: "3px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                              fontSize: "clamp(12px, 1.5vw, 13px)", fontWeight: 500,
+                              color: "var(--text-primary)", marginBottom: "3px",
+                              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                             }}>{m.title}</p>
-                            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                               {m.incoming_date && (
                                 <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
                                   In: {new Date(m.incoming_date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
@@ -504,18 +410,20 @@ export default function DashboardPage() {
                           </div>
                         </div>
 
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                        {/* Actions */}
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
                           <span style={{
-                            fontSize: "11px", fontWeight: 500, padding: "3px 10px",
-                            borderRadius: "20px", backgroundColor: s.bg,
-                            color: s.color, border: `1px solid ${s.border}`,
+                            fontSize: "11px", fontWeight: 500,
+                            padding: "3px 8px", borderRadius: "20px",
+                            backgroundColor: s.bg, color: s.color, border: `1px solid ${s.border}`,
+                            whiteSpace: "nowrap",
                           }}>{s.label}</span>
                           <button
                             onClick={(e) => { e.stopPropagation(); setDeleteConfirm(m.id); }}
                             style={{
                               background: "transparent", border: "1px solid var(--border)",
-                              borderRadius: "6px", padding: "4px 8px", cursor: "pointer",
-                              fontSize: "14px", color: "var(--text-muted)",
+                              borderRadius: "6px", padding: "4px 7px", cursor: "pointer",
+                              fontSize: "13px", color: "var(--text-muted)", transition: "all 0.2s",
                             }}
                             onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ef4444"; e.currentTarget.style.color = "#ef4444"; }}
                             onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-muted)"; }}
@@ -530,69 +438,58 @@ export default function DashboardPage() {
                   })}
                 </div>
               </div>
-            )}
-
-            {manuscripts.length === 0 && !uploading && (
-              <div style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
-                <p style={{ fontSize: "13px" }}>No documents yet. Upload your first document above.</p>
-              </div>
+            ) : (
+              !uploading && (
+                <div style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                  <p style={{ fontSize: "13px" }}>No documents yet. Upload your first document above.</p>
+                </div>
+              )
             )}
           </div>
 
           {/* RIGHT — Earnings Calculator */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }} className="aipr-calculator">
 
             {/* Rate card */}
             <div style={{
               backgroundColor: "var(--bg-card)", border: "1px solid var(--border)",
               borderRadius: "12px", padding: "16px",
             }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
                 <p style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.6px" }}>
                   Current rate
                 </p>
-                <button
-                  onClick={() => setEditingRate(!editingRate)}
-                  style={{
-                    background: "transparent", border: "1px solid var(--border)",
-                    borderRadius: "6px", padding: "2px 8px", cursor: "pointer",
-                    fontSize: "11px", color: "var(--text-muted)",
-                  }}
-                >
+                <button onClick={() => setEditingRate(!editingRate)} style={{
+                  background: "transparent", border: "1px solid var(--border)",
+                  borderRadius: "6px", padding: "2px 8px", cursor: "pointer",
+                  fontSize: "11px", color: "var(--text-muted)",
+                }}>
                   {editingRate ? "Cancel" : "✏️ Edit"}
                 </button>
               </div>
 
               {editingRate ? (
-                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>₹</span>
-                  <input
-                    type="number"
-                    value={rateInput}
-                    onChange={(e) => setRateInput(e.target.value)}
-                    style={{
-                      flex: 1, backgroundColor: "var(--bg)", border: "1px solid var(--border)",
-                      borderRadius: "6px", padding: "6px 10px", fontSize: "13px",
-                      color: "var(--text-primary)", outline: "none",
-                    }}
-                  />
+                  <input type="number" value={rateInput} onChange={(e) => setRateInput(e.target.value)} style={{
+                    flex: 1, minWidth: "80px", backgroundColor: "var(--bg)",
+                    border: "1px solid var(--border)", borderRadius: "6px",
+                    padding: "6px 10px", fontSize: "13px", color: "var(--text-primary)", outline: "none",
+                  }} />
                   <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>/ 1K words</span>
-                  <button
-                    onClick={saveRate}
-                    style={{
-                      backgroundColor: "var(--accent)", color: "#fff", border: "none",
-                      borderRadius: "6px", padding: "6px 12px", cursor: "pointer", fontSize: "12px",
-                    }}
-                  >Save</button>
+                  <button onClick={saveRate} style={{
+                    backgroundColor: "var(--accent)", color: "#fff", border: "none",
+                    borderRadius: "6px", padding: "6px 12px", cursor: "pointer", fontSize: "12px",
+                  }}>Save</button>
                 </div>
               ) : (
-                <p style={{ fontSize: "22px", fontWeight: 700, color: "var(--text-primary)" }}>
+                <p style={{ fontSize: "clamp(18px, 3vw, 22px)", fontWeight: 700, color: "var(--text-primary)" }}>
                   ₹{rate} <span style={{ fontSize: "12px", fontWeight: 400, color: "var(--text-muted)" }}>per 1,000 words</span>
                 </p>
               )}
             </div>
 
-            {/* Monthly payout cards */}
+            {/* Monthly payout */}
             <div style={{
               backgroundColor: "var(--bg-card)", border: "1px solid var(--border)",
               borderRadius: "12px", padding: "16px",
@@ -600,7 +497,6 @@ export default function DashboardPage() {
               <p style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: "14px" }}>
                 Monthly earnings
               </p>
-
               <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                 {monthsToShow.map(({ month, year, data, isCurrent }) => (
                   <div key={`${year}-${month}`} style={{
@@ -608,8 +504,8 @@ export default function DashboardPage() {
                     border: `1px solid ${isCurrent ? "var(--accent-border)" : "var(--border)"}`,
                     borderRadius: "10px", padding: "12px 14px",
                   }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                      <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                      <div style={{ minWidth: 0 }}>
                         <p style={{ fontSize: "12px", fontWeight: 500, color: isCurrent ? "var(--accent)" : "var(--text-secondary)", marginBottom: "2px" }}>
                           {getMonthName(year, month)} {isCurrent && <span style={{ fontSize: "10px" }}>— till date</span>}
                         </p>
@@ -617,29 +513,43 @@ export default function DashboardPage() {
                           {data.docs} doc{data.docs !== 1 ? "s" : ""} · {data.words.toLocaleString()} words
                         </p>
                       </div>
-                      <p style={{ fontSize: "18px", fontWeight: 700, color: isCurrent ? "var(--accent)" : "var(--text-primary)" }}>
+                      <p style={{ fontSize: "clamp(16px, 2.5vw, 18px)", fontWeight: 700, color: isCurrent ? "var(--accent)" : "var(--text-primary)", flexShrink: 0 }}>
                         ₹{calcPayout(data.words, rate)}
                       </p>
                     </div>
                   </div>
                 ))}
               </div>
-
-              {/* Total this month */}
               <div style={{
                 marginTop: "12px", borderTop: "1px solid var(--border)", paddingTop: "12px",
                 display: "flex", justifyContent: "space-between", alignItems: "center",
               }}>
-                <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>Total (3 months)</span>
+                <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>Total (2 months)</span>
                 <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)" }}>
                   ₹{monthsToShow.reduce((sum, { data }) => sum + (data.words / 1000) * rate, 0).toFixed(2)}
                 </span>
               </div>
             </div>
-
           </div>
         </div>
       </div>
+
+      <style>{`
+        @media (max-width: 768px) {
+          .aipr-dashboard-grid {
+            grid-template-columns: 1fr !important;
+          }
+          .aipr-calculator {
+            display: none !important;
+          }
+          .aipr-calculator.visible {
+            display: flex !important;
+          }
+          .aipr-calc-toggle {
+            display: block !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

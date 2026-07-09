@@ -6,8 +6,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Split text into chunks of ~3000 words to stay within token limits
-function chunkText(text: string, chunkSize: number = 3000): string[] {
+function chunkText(text: string, chunkSize: number = 1500): string[] {
   const words = text.split(/\s+/);
   const chunks: string[] = [];
   let current: string[] = [];
@@ -23,7 +22,6 @@ function chunkText(text: string, chunkSize: number = 3000): string[] {
   return chunks;
 }
 
-// Detect and separate references section
 function separateReferences(text: string): { mainText: string; references: string } {
   const refPatterns = [
     /\n\s*references\s*\n/i,
@@ -52,11 +50,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No manuscript text provided" }, { status: 400 });
     }
 
-    // Separate references — never edit these
     const { mainText, references } = separateReferences(manuscriptText);
 
-    // Split into chunks
-    const chunks = chunkText(mainText, 3000);
+    const chunks = chunkText(mainText, 1500);
     console.log(`Processing ${chunks.length} chunk(s)`);
 
     const allSentences: any[] = [];
@@ -71,7 +67,6 @@ export async function POST(request: NextRequest) {
       key_changes: [] as string[],
     };
 
-    // Process each chunk
     for (let i = 0; i < chunks.length; i++) {
       console.log(`Processing chunk ${i + 1} of ${chunks.length}`);
 
@@ -84,7 +79,7 @@ export async function POST(request: NextRequest) {
           { role: "user", content: prompt },
         ],
         temperature: 0.3,
-        max_tokens: 4000,
+        max_tokens: 16000,
         response_format: { type: "json_object" },
       });
 
@@ -111,17 +106,14 @@ export async function POST(request: NextRequest) {
         console.error(`Chunk ${i + 1} parse error:`, parseError);
       }
 
-      // Small delay between chunks to avoid rate limits
       if (i < chunks.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
 
-    // Combine all chunks + append references unchanged
     const fullEditedText = allEditedParts.join("\n\n") +
       (references ? "\n\n" + references : "");
 
-    // Keep key changes unique and limit to 10
     summaryTotals.key_changes = [...new Set(summaryTotals.key_changes)].slice(0, 10);
 
     const result = {

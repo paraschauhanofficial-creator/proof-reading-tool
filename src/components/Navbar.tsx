@@ -50,36 +50,29 @@ export default function Navbar({ showAuth = true }: { showAuth?: boolean }) {
       <div style={{
         maxWidth: "1100px",
         margin: "0 auto",
-        padding: "0 1.5rem",
+        padding: "0 clamp(1rem, 3vw, 1.5rem)",
         height: "56px",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
       }}>
         {/* Logo */}
-        <Link href="/" style={{ textDecoration: "none" }}>
+        <Link href="/" style={{ textDecoration: "none", flexShrink: 0 }}>
           <span style={{ fontSize: "15px", fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.3px" }}>
             AI<span style={{ color: "var(--accent)" }}>PR</span>
           </span>
         </Link>
 
         {/* Desktop Actions */}
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }} className="desktop-nav">
-          {/* Theme Toggle */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }} className="aipr-desktop-nav">
           <button
             onClick={toggleTheme}
             style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border)",
-              color: "var(--text-secondary)",
-              borderRadius: "8px",
-              width: "34px",
-              height: "34px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
-              fontSize: "16px",
+              background: "var(--bg-card)", border: "1px solid var(--border)",
+              color: "var(--text-secondary)", borderRadius: "8px",
+              width: "34px", height: "34px",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", fontSize: "16px",
             }}
             aria-label="Toggle theme"
           >
@@ -91,142 +84,104 @@ export default function Navbar({ showAuth = true }: { showAuth?: boolean }) {
               {user ? (
                 <>
                   <Link href="/dashboard" style={{
-                    fontSize: "13px",
-                    color: "var(--text-secondary)",
-                    textDecoration: "none",
-                    padding: "7px 14px",
-                    borderRadius: "8px",
-                    border: "1px solid var(--border)",
-                    backgroundColor: "var(--bg-card)",
-                  }}>
-                    Dashboard
-                  </Link>
+                    fontSize: "13px", color: "var(--text-secondary)", textDecoration: "none",
+                    padding: "7px 14px", borderRadius: "8px",
+                    border: "1px solid var(--border)", backgroundColor: "var(--bg-card)",
+                  }}>Dashboard</Link>
                   <Link href="/records" style={{
-                    fontSize: "13px",
-                    color: "var(--text-secondary)",
-                    textDecoration: "none",
-                    padding: "7px 14px",
-                    borderRadius: "8px",
-                    border: "1px solid var(--border)",
-                    backgroundColor: "var(--bg-card)",
-                    }}>
-                    Records
-                  </Link>
-                  <button
-                    onClick={handleSignOut}
-                    style={{
-                      fontSize: "13px",
-                      color: "var(--text-secondary)",
-                      background: "transparent",
-                      border: "1px solid var(--border)",
-                      padding: "7px 14px",
-                      borderRadius: "8px",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Sign out
-                  </button>
+                    fontSize: "13px", color: "var(--text-secondary)", textDecoration: "none",
+                    padding: "7px 14px", borderRadius: "8px",
+                    border: "1px solid var(--border)", backgroundColor: "var(--bg-card)",
+                  }}>Records</Link>
+                  <button onClick={handleSignOut} style={{
+                    fontSize: "13px", color: "var(--text-secondary)", background: "transparent",
+                    border: "1px solid var(--border)", padding: "7px 14px",
+                    borderRadius: "8px", cursor: "pointer",
+                  }}>Sign out</button>
                 </>
               ) : (
                 <>
                   <Link href="/auth/login" style={{
-                    fontSize: "13px",
-                    color: "var(--text-secondary)",
-                    textDecoration: "none",
-                    padding: "7px 14px",
-                    borderRadius: "8px",
-                    border: "1px solid var(--border)",
-                    backgroundColor: "var(--bg-card)",
-                  }}>
-                    Sign in
-                  </Link>
+                    fontSize: "13px", color: "var(--text-secondary)", textDecoration: "none",
+                    padding: "7px 14px", borderRadius: "8px",
+                    border: "1px solid var(--border)", backgroundColor: "var(--bg-card)",
+                  }}>Sign in</Link>
                   <Link href="/auth/signup" style={{
-                    fontSize: "13px",
-                    color: "#fff",
-                    textDecoration: "none",
-                    padding: "7px 14px",
-                    borderRadius: "8px",
-                    backgroundColor: "var(--accent)",
-                  }}>
-                    Get started
-                  </Link>
+                    fontSize: "13px", color: "#fff", textDecoration: "none",
+                    padding: "7px 14px", borderRadius: "8px", backgroundColor: "var(--accent)",
+                  }}>Get started</Link>
                 </>
               )}
             </>
           )}
         </div>
 
-        {/* Mobile Menu Button */}
-        <button
-          onClick={() => setMenuOpen(!menuOpen)}
-          className="mobile-menu-btn"
-          style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            color: "var(--text-primary)",
-            borderRadius: "8px",
-            width: "34px",
-            height: "34px",
-            display: "none",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-            fontSize: "18px",
-          }}
-          aria-label="Menu"
-        >
-          {menuOpen ? "✕" : "☰"}
-        </button>
+        {/* Mobile — theme toggle always visible + hamburger */}
+        <div style={{ display: "none", alignItems: "center", gap: "8px" }} className="aipr-mobile-nav">
+          <button
+            onClick={toggleTheme}
+            style={{
+              background: "var(--bg-card)", border: "1px solid var(--border)",
+              color: "var(--text-secondary)", borderRadius: "8px",
+              width: "34px", height: "34px",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", fontSize: "16px",
+            }}
+            aria-label="Toggle theme"
+          >
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
+          <button
+            onClick={() => setMenuOpen(!menuOpen)}
+            style={{
+              background: "var(--bg-card)", border: "1px solid var(--border)",
+              color: "var(--text-primary)", borderRadius: "8px",
+              width: "34px", height: "34px",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", fontSize: "18px",
+            }}
+            aria-label="Menu"
+          >
+            {menuOpen ? "✕" : "☰"}
+          </button>
+        </div>
       </div>
 
       {/* Mobile Dropdown */}
       {menuOpen && (
         <div style={{
-          backgroundColor: "var(--bg-card)",
-          borderTop: "1px solid var(--border)",
-          padding: "1rem 1.5rem",
-          display: "flex",
-          flexDirection: "column",
-          gap: "8px",
-        }} className="mobile-menu">
-          <button
-            onClick={toggleTheme}
-            style={{
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-              color: "var(--text-secondary)",
-              borderRadius: "8px",
-              padding: "9px 14px",
-              cursor: "pointer",
-              fontSize: "13px",
-              textAlign: "left",
-            }}
-          >
-            {theme === "dark" ? "☀️ Light mode" : "🌙 Dark mode"}
-          </button>
+          backgroundColor: "var(--bg-card)", borderTop: "1px solid var(--border)",
+          padding: "1rem clamp(1rem, 3vw, 1.5rem)",
+          display: "flex", flexDirection: "column", gap: "8px",
+        }}>
           {user ? (
             <>
               <Link href="/dashboard" onClick={() => setMenuOpen(false)} style={{
                 fontSize: "13px", color: "var(--text-primary)", textDecoration: "none",
-                padding: "9px 14px", borderRadius: "8px", border: "1px solid var(--border)",
-                backgroundColor: "var(--bg)",
-              }}>Dashboard</Link>
+                padding: "10px 14px", borderRadius: "8px",
+                border: "1px solid var(--border)", backgroundColor: "var(--bg)",
+              }}>📊 Dashboard</Link>
+              <Link href="/records" onClick={() => setMenuOpen(false)} style={{
+                fontSize: "13px", color: "var(--text-primary)", textDecoration: "none",
+                padding: "10px 14px", borderRadius: "8px",
+                border: "1px solid var(--border)", backgroundColor: "var(--bg)",
+              }}>📋 Records</Link>
               <button onClick={handleSignOut} style={{
-                fontSize: "13px", color: "var(--text-secondary)", background: "var(--bg)",
-                border: "1px solid var(--border)", padding: "9px 14px", borderRadius: "8px",
-                cursor: "pointer", textAlign: "left",
+                fontSize: "13px", color: "#ef4444", background: "var(--bg)",
+                border: "1px solid rgba(239,68,68,0.3)", padding: "10px 14px",
+                borderRadius: "8px", cursor: "pointer", textAlign: "left",
               }}>Sign out</button>
             </>
           ) : (
             <>
               <Link href="/auth/login" onClick={() => setMenuOpen(false)} style={{
                 fontSize: "13px", color: "var(--text-primary)", textDecoration: "none",
-                padding: "9px 14px", borderRadius: "8px", border: "1px solid var(--border)",
-                backgroundColor: "var(--bg)", display: "block",
+                padding: "10px 14px", borderRadius: "8px",
+                border: "1px solid var(--border)", backgroundColor: "var(--bg)", display: "block",
               }}>Sign in</Link>
               <Link href="/auth/signup" onClick={() => setMenuOpen(false)} style={{
                 fontSize: "13px", color: "#fff", textDecoration: "none",
-                padding: "9px 14px", borderRadius: "8px",
+                padding: "10px 14px", borderRadius: "8px",
                 backgroundColor: "var(--accent)", display: "block", textAlign: "center",
               }}>Get started</Link>
             </>
@@ -236,8 +191,8 @@ export default function Navbar({ showAuth = true }: { showAuth?: boolean }) {
 
       <style>{`
         @media (max-width: 640px) {
-          .desktop-nav { display: none !important; }
-          .mobile-menu-btn { display: flex !important; }
+          .aipr-desktop-nav { display: none !important; }
+          .aipr-mobile-nav { display: flex !important; }
         }
       `}</style>
     </nav>
