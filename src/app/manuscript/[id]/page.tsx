@@ -164,16 +164,66 @@ export default function ManuscriptPage() {
     setProcessing(false);
   };
 
-  const handleDownloadEdited = () => {
-    if (!result?.edited_text) return;
-    const blob = new Blob([result.edited_text], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+  const handleDownloadEdited = async () => {
+  if (!result?.sentences || !manuscript?.original_file_url) return;
+  try {
+    const response = await fetch("/api/generate-docx", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fileUrl: manuscript.original_file_url,
+        sentences: result.sentences,
+        title: manuscript.title,
+        type: "clean",
+      }),
+    });
+    const { file } = await response.json();
+    if (!file) return;
+    const blob = new Blob(
+      [Uint8Array.from(atob(file), c => c.charCodeAt(0))],
+      { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }
+    );
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `${manuscript.title}-edited.docx`;
     a.click();
     URL.revokeObjectURL(url);
-  };
+  } catch (error) {
+    console.error("Download error:", error);
+  }
+};
+
+const handleDownloadTracked = async () => {
+  if (!result?.sentences || !manuscript?.original_file_url) return;
+  try {
+    const response = await fetch("/api/generate-docx", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fileUrl: manuscript.original_file_url,
+        sentences: result.sentences,
+        title: manuscript.title,
+        type: "tracked",
+      }),
+    });
+    const { file } = await response.json();
+    if (!file) return;
+    const blob = new Blob(
+      [Uint8Array.from(atob(file), c => c.charCodeAt(0))],
+      { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${manuscript.title}-edit-PC.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error("Download error:", error);
+  }
+};
+
 
   const stageIndex = manuscript ? getStageIndex(manuscript.status) : 0;
 
@@ -431,14 +481,16 @@ export default function ManuscriptPage() {
                 }}>
                   📄 Download edited DOCX
                 </button>
-                <button onClick={() => setShowCompare(!showCompare)} style={{
-                  fontSize: "13px", fontWeight: 500, padding: "9px 18px", borderRadius: "8px",
-                  border: "1px solid var(--border)", backgroundColor: "var(--bg-card)",
-                  color: "var(--text-primary)", cursor: "pointer",
-                  display: "flex", alignItems: "center", gap: "6px",
-                }}>
-                  🔀 Compare original vs edited
-                </button>
+                <button
+                    onClick={handleDownloadTracked}
+                    style={{
+                      fontSize: "12px", fontWeight: 500, padding: "8px 16px", borderRadius: "8px",
+                      border: "none", backgroundColor: "var(--accent)", color: "#fff", cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: "6px",
+                    }}
+                  >
+                    📥 Download edit-PC version
+                  </button>
               </div>
 
               {/* Compare panel */}
