@@ -36,7 +36,6 @@ export default function RecordsPage() {
     return d.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-");
   };
 
-  // Get unique months from delivery dates
   const months = Array.from(new Set(
     manuscripts
       .filter(m => m.delivery_date)
@@ -67,16 +66,8 @@ export default function RecordsPage() {
     }));
 
     const ws = XLSX.utils.json_to_sheet(rows);
-
-    // Column widths
     ws["!cols"] = [
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 35 },
-      { wch: 40 },
-      { wch: 20 },
-      { wch: 16 },
-      { wch: 12 },
+      { wch: 16 }, { wch: 16 }, { wch: 35 }, { wch: 40 }, { wch: 20 }, { wch: 16 }, { wch: 12 },
     ];
 
     const wb = XLSX.utils.book_new();
@@ -95,12 +86,12 @@ export default function RecordsPage() {
     <div style={{ minHeight: "100vh", backgroundColor: "var(--bg)" }}>
       <Navbar />
 
-      <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "40px 24px" }}>
+      <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "clamp(20px, 5vw, 40px) clamp(16px, 4vw, 24px)" }}>
 
         {/* Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "28px", flexWrap: "wrap", gap: "12px" }}>
-          <div>
-            <h1 style={{ fontSize: "22px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "clamp(20px, 4vw, 28px)", flexWrap: "wrap", gap: "14px" }}>
+          <div style={{ minWidth: 0 }}>
+            <h1 style={{ fontSize: "clamp(18px, 3vw, 22px)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
               Records
             </h1>
             <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
@@ -108,8 +99,7 @@ export default function RecordsPage() {
             </p>
           </div>
 
-          <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
-            {/* Month filter */}
+          <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", width: "100%", maxWidth: "100%" }} className="aipr-records-controls">
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(e.target.value)}
@@ -117,6 +107,7 @@ export default function RecordsPage() {
                 backgroundColor: "var(--bg-card)", border: "1px solid var(--border)",
                 borderRadius: "8px", padding: "8px 12px", fontSize: "13px",
                 color: "var(--text-primary)", outline: "none", cursor: "pointer",
+                flex: "1 1 auto", minWidth: "140px",
               }}
             >
               <option value="all">All months</option>
@@ -127,19 +118,27 @@ export default function RecordsPage() {
               ))}
             </select>
 
-            {/* Export button */}
             <button
               onClick={handleExport}
               style={{
                 backgroundColor: "var(--accent)", color: "#fff", border: "none",
                 borderRadius: "8px", padding: "8px 18px", fontSize: "13px",
-                fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: "6px",
+                fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center",
+                justifyContent: "center", gap: "6px", flex: "0 1 auto", whiteSpace: "nowrap",
               }}
             >
               📥 Export Excel
             </button>
           </div>
         </div>
+
+        {/* Mobile hint */}
+        <p className="aipr-scroll-hint" style={{
+          display: "none", fontSize: "11px", color: "var(--text-muted)",
+          marginBottom: "8px", fontStyle: "italic",
+        }}>
+          ← Swipe the table sideways to see all columns →
+        </p>
 
         {/* Table */}
         {loading ? (
@@ -150,8 +149,8 @@ export default function RecordsPage() {
           </div>
         ) : (
           <div style={{ border: "1px solid var(--border)", borderRadius: "12px", overflow: "hidden" }}>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px", minWidth: "760px" }}>
                 <thead>
                   <tr style={{ backgroundColor: "var(--bg-card)", borderBottom: "1px solid var(--border)" }}>
                     {[
@@ -200,17 +199,11 @@ export default function RecordsPage() {
                       <td style={{ padding: "11px 14px", color: "var(--text-secondary)", textAlign: "right" }}>
                         {m.word_count ? m.word_count.toLocaleString() : <span style={{ color: "var(--text-muted)" }}>—</span>}
                       </td>
-                      <td style={{ padding: "11px 14px", color: "var(--text-muted)" }}>
-                        —
-                      </td>
-                      <td style={{ padding: "11px 14px", color: "var(--text-muted)" }}>
-                        —
-                      </td>
+                      <td style={{ padding: "11px 14px", color: "var(--text-muted)" }}>—</td>
+                      <td style={{ padding: "11px 14px", color: "var(--text-muted)" }}>—</td>
                     </tr>
                   ))}
                 </tbody>
-
-                {/* Footer totals */}
                 <tfoot>
                   <tr style={{ backgroundColor: "var(--bg-card)", borderTop: "1px solid var(--border)" }}>
                     <td colSpan={4} style={{ padding: "11px 14px", fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>
@@ -227,6 +220,12 @@ export default function RecordsPage() {
           </div>
         )}
       </div>
+
+      <style>{`
+        @media (max-width: 640px) {
+          .aipr-scroll-hint { display: block !important; }
+        }
+      `}</style>
     </div>
   );
 }

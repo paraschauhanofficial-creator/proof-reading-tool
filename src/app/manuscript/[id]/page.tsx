@@ -281,7 +281,7 @@ export default function ManuscriptPage() {
     setProcessing(false);
   };
 
-  const handleDownload = async (type: "clean" | "tracked") => {
+  const handleDownload = async (type: "edited" | "editpc") => {
     if (!result?.sentences || !manuscript?.original_file_url) return;
     try {
       const { data: { user } } = await createClient().auth.getUser();
@@ -303,7 +303,7 @@ export default function ManuscriptPage() {
       const parts = manuscript.original_file_url.split("/");
       let filename = parts[parts.length - 1].replace(/^\d+_/, "");
       const base = filename.replace(/\.docx$/i, "");
-      const downloadName = type === "clean"
+      const downloadName = type === "edited"
         ? `${base.replace(/-org$/i, "")}.docx`
         : `${base.replace(/-org$/i, "")}-edit-PC.docx`;
 
@@ -732,14 +732,14 @@ export default function ManuscriptPage() {
               display: "flex", gap: "10px", flexWrap: "wrap",
               position: "sticky", bottom: 0,
             }}>
-              <button onClick={() => handleDownload("clean")} style={{
+              <button onClick={() => handleDownload("edited")} style={{
                 fontSize: "clamp(12px, 1.5vw, 13px)", fontWeight: 500,
                 padding: "9px clamp(12px, 2vw, 18px)", borderRadius: "8px",
                 border: "none", backgroundColor: "var(--accent)", color: "#fff",
                 cursor: "pointer", display: "flex", alignItems: "center", gap: "6px",
                 flex: "1 1 auto",
               }}>📄 Download edited DOCX</button>
-              <button onClick={() => handleDownload("tracked")} style={{
+              <button onClick={() => handleDownload("editpc")} style={{
                 fontSize: "clamp(12px, 1.5vw, 13px)", fontWeight: 500,
                 padding: "9px clamp(12px, 2vw, 18px)", borderRadius: "8px",
                 border: "none", backgroundColor: "var(--accent)", color: "#fff",

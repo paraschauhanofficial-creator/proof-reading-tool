@@ -2,9 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { PROOFREAD_SYSTEM_PROMPT, buildProofreadPrompt } from "@/lib/proofread-prompt";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY ?? "placeholder",
-});
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    _openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+  }
+  return _openai;
+}
 
 function chunkText(text: string, chunkSize: number = 1500): string[] {
   const words = text.split(/\s+/);
@@ -42,6 +48,10 @@ function separateReferences(text: string): { mainText: string; references: strin
   return { mainText: text, references: "" };
 }
 
+
+export const dynamic = "force-dynamic";
+
+
 export async function POST(request: NextRequest) {
   try {
     const { manuscriptText } = await request.json();
@@ -72,7 +82,7 @@ export async function POST(request: NextRequest) {
 
       const prompt = buildProofreadPrompt(chunks[i]);
 
-      const response = await openai.chat.completions.create({
+      const response = await getOpenAI().chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: PROOFREAD_SYSTEM_PROMPT },
