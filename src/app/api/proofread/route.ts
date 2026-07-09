@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { PROOFREAD_SYSTEM_PROMPT, buildProofreadPrompt } from "@/lib/proofread-prompt";
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY ?? "placeholder",
 });
 
 function chunkText(text: string, chunkSize: number = 1500): string[] {
