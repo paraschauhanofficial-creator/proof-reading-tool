@@ -83,13 +83,13 @@ export async function POST(request: NextRequest) {
       const prompt = buildProofreadPrompt(chunks[i]);
 
       const response = await getOpenAI().chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-5.4-mini",
         messages: [
           { role: "system", content: PROOFREAD_SYSTEM_PROMPT },
           { role: "user", content: prompt },
         ],
         temperature: 0.3,
-        max_tokens: 16000,
+        max_completion_tokens: 16000,
         response_format: { type: "json_object" },
       });
 
