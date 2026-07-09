@@ -1,4 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
+import OpenAI from "openai";
+import { PROOFREAD_SYSTEM_PROMPT, buildProofreadPrompt } from "@/lib/proofread-prompt";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Split text into chunks of ~3000 words to stay within token limits
+function chunkText(text: string, chunkSize: number = 3000): string[] {
+  const words = text.split(/\s+/);
+  const chunks: string[] = [];
+  let current: string[] = [];
+
+  for (const word of words) {
+    current.push(word);
+    if (current.length >= chunkSize) {
+      chunks.push(current.join(" "));
+      current = [];
+    }
+  }
+  if (current.length > 0) chunks.push(current.join(" "));
+  return chunks;
+}
+
+// Detect and separate references section
+function separateReferences(text: string): { mainText: string; references: string } {
+  const refPatterns = [
+    /\n\s*references\s*\n/i,
+    /\n\s*bibliography\s*\n/i,
+    /\n\s*works cited\s*\n/i,
+    /\n\s*reference\s*\n/i,
+  ];
+
+  for (const pattern of refPatterns) {
+    const match = text.search(pattern);
+    if (match !== -1) {
+      return {
+        mainText: text.slice(0, match).trim(),
+        references: text.slice(match).trim(),
+      };
+    }
+  }
+  return { mainText: text, references: "" };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -8,102 +52,86 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No manuscript text provided" }, { status: 400 });
     }
 
-    // Split into sentences for dummy processing
-    const sentences = manuscriptText
-      .split(/(?<=[.!?])\s+/)
-      .filter((s: string) => s.trim().length > 20)
-      .slice(0, 50);
+    // Separate references — never edit these
+    const { mainText, references } = separateReferences(manuscriptText);
 
-    // Dummy edits — apply realistic mock changes
-    const editedSentences = sentences.map((original: string, i: number) => {
-      let edited = original;
-      let changed = false;
+    // Split into chunks
+    const chunks = chunkText(mainText, 3000);
+    console.log(`Processing ${chunks.length} chunk(s)`);
 
-      // Apply mock rules
-      if (original.includes("suggest")) {
-        edited = edited.replace(/suggest/g, "indicate");
-        changed = true;
-      }
-      if (original.includes("shows") || original.includes("show ")) {
-        edited = edited.replace(/shows/g, "demonstrates").replace(/show /g, "demonstrate ");
-        changed = true;
-      }
-      if (original.includes("patients")) {
-        edited = edited.replace(/cancer patients/g, "patients with cancer")
-          .replace(/lung cancer patients/g, "patients with lung cancer");
-        if (edited !== original) changed = true;
-      }
-      if (original.includes("sleep disorders")) {
-        edited = edited.replace(/sleep disorders/g, "sleep disturbances");
-        changed = true;
-      }
-      if (original.includes("severely")) {
-        edited = edited.replace(/severely/g, "substantially");
-        changed = true;
-      }
-      if (original.includes("often experience")) {
-        edited = edited.replace(/often experience/g, "commonly experience");
-        changed = true;
-      }
-      if (original.includes("This study")) {
-        edited = edited.replace(/This study/g, "The present study");
-        changed = true;
-      }
-      if (original.includes("This article")) {
-        edited = edited.replace(/This article/g, "The present review");
-        changed = true;
-      }
-      if (original.includes("death")) {
-        edited = edited.replace(/death/g, "mortality");
-        changed = true;
-      }
-      if (original.includes("P=")) {
-        edited = edited.replace(/P=/g, "P = ");
-        changed = true;
-      }
-      if (original.includes("95%CI")) {
-        edited = edited.replace(/95%CI/g, "95% CI");
-        changed = true;
-      }
+    const allSentences: any[] = [];
+    const allEditedParts: string[] = [];
+    const summaryTotals = {
+      grammar_corrections: 0,
+      apa_corrections: 0,
+      terminology_corrections: 0,
+      consistency_improvements: 0,
+      style_improvements: 0,
+      total_edits: 0,
+      key_changes: [] as string[],
+    };
 
-      // Every 4th unchanged sentence — make a minor style change
-      if (!changed && i % 4 === 0 && original.length > 50) {
-        edited = original.replace(/Furthermore,/g, "Moreover,")
-          .replace(/In addition,/g, "Additionally,")
-          .replace(/showed that/g, "demonstrated that")
-          .replace(/found that/g, "indicated that");
-        changed = edited !== original;
+    // Process each chunk
+    for (let i = 0; i < chunks.length; i++) {
+      console.log(`Processing chunk ${i + 1} of ${chunks.length}`);
+
+      const prompt = buildProofreadPrompt(chunks[i]);
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: PROOFREAD_SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.3,
+        max_tokens: 4000,
+        response_format: { type: "json_object" },
+      });
+
+      const content = response.choices[0].message.content || "{}";
+
+      try {
+        const parsed = JSON.parse(content);
+
+        if (parsed.edited_text) allEditedParts.push(parsed.edited_text);
+        if (parsed.sentences) allSentences.push(...parsed.sentences);
+
+        if (parsed.summary) {
+          summaryTotals.grammar_corrections += parsed.summary.grammar_corrections || 0;
+          summaryTotals.apa_corrections += parsed.summary.apa_corrections || 0;
+          summaryTotals.terminology_corrections += parsed.summary.terminology_corrections || 0;
+          summaryTotals.consistency_improvements += parsed.summary.consistency_improvements || 0;
+          summaryTotals.style_improvements += parsed.summary.style_improvements || 0;
+          summaryTotals.total_edits += parsed.summary.total_edits || 0;
+          if (parsed.summary.key_changes) {
+            summaryTotals.key_changes.push(...parsed.summary.key_changes);
+          }
+        }
+      } catch (parseError) {
+        console.error(`Chunk ${i + 1} parse error:`, parseError);
       }
 
-      return { original, edited, changed };
-    });
+      // Small delay between chunks to avoid rate limits
+      if (i < chunks.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
 
-    const changedCount = editedSentences.filter((s: any) => s.changed).length;
+    // Combine all chunks + append references unchanged
+    const fullEditedText = allEditedParts.join("\n\n") +
+      (references ? "\n\n" + references : "");
+
+    // Keep key changes unique and limit to 10
+    summaryTotals.key_changes = [...new Set(summaryTotals.key_changes)].slice(0, 10);
 
     const result = {
-      edited_text: editedSentences.map((s: any) => s.edited).join(" "),
-      sentences: editedSentences,
-      summary: {
-        grammar_corrections: Math.floor(changedCount * 0.2),
-        apa_corrections: Math.floor(changedCount * 0.15),
-        terminology_corrections: Math.floor(changedCount * 0.3),
-        consistency_improvements: Math.floor(changedCount * 0.2),
-        style_improvements: Math.floor(changedCount * 0.15),
-        total_edits: changedCount,
-        key_changes: [
-          "Replaced 'suggest' with 'indicate' throughout",
-          "Applied person-first language: 'lung cancer patients' → 'patients with lung cancer'",
-          "Replaced 'sleep disorders' with 'sleep disturbances'",
-          "Replaced 'severely' with 'substantially'",
-          "Replaced 'often experience' with 'commonly experience'",
-          "Corrected statistical notation: P= → P =",
-          "Applied passive voice in Methods section",
-          "Standardized abbreviations per APA guidelines",
-        ].slice(0, Math.min(8, changedCount)),
-      },
+      edited_text: fullEditedText,
+      sentences: allSentences,
+      summary: summaryTotals,
     };
 
     return NextResponse.json({ success: true, result });
+
   } catch (error: any) {
     console.error("Proofread error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });

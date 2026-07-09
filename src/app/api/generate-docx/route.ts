@@ -21,59 +21,118 @@ function extractTextFromXml(xml: string): string {
 }
 
 function replaceTextInRuns(paragraphXml: string, newText: string): string {
-  // Keep all XML structure, just replace the text content inside <w:t> tags
-  const runs = paragraphXml.match(/<w:r[ >].*?<\/w:r>/gs) || [];
-  if (runs.length === 0) return paragraphXml;
-
-  // Put all new text in the first run, empty out the rest
   let replaced = false;
-  let result = paragraphXml;
-
-  result = result.replace(/<w:t([^>]*)>(.*?)<\/w:t>/gs, (match, attrs, content) => {
+  return paragraphXml.replace(/<w:t([^>]*)>(.*?)<\/w:t>/gs, (match, attrs, content) => {
     if (!replaced) {
       replaced = true;
       return `<w:t xml:space="preserve">${escapeXml(newText)}</w:t>`;
     }
     return `<w:t></w:t>`;
   });
-
-  return result;
 }
 
 function wrapWithDeletion(paragraphXml: string, author: string = "AIPR"): string {
   const date = new Date().toISOString().split(".")[0] + "Z";
-  // Wrap all runs in w:del
-  const result = paragraphXml.replace(
+  return paragraphXml.replace(
     /(<w:r[ >])(.*?)(<\/w:r>)/gs,
     (match, open, content, close) => {
-      // Replace w:t with w:delText inside deletion
-      const delContent = content.replace(/<w:t([^>]*)>(.*?)<\/w:t>/gs,
-        (m: string, attrs: string, text: string) => `<w:delText xml:space="preserve">${text}</w:delText>`
+      const delContent = content.replace(
+        /<w:t([^>]*)>(.*?)<\/w:t>/gs,
+        (m: string, attrs: string, text: string) =>
+          `<w:delText xml:space="preserve">${text}</w:delText>`
       );
       return `<w:del w:id="${Math.floor(Math.random() * 9000) + 1000}" w:author="${author}" w:date="${date}">${open}${delContent}${close}</w:del>`;
     }
   );
-  return result;
 }
 
 function wrapWithInsertion(paragraphXml: string, newText: string, author: string = "AIPR"): string {
   const date = new Date().toISOString().split(".")[0] + "Z";
   const id = Math.floor(Math.random() * 9000) + 1000;
-
-  // Get first run's properties
   const rPrMatch = paragraphXml.match(/<w:rPr>(.*?)<\/w:rPr>/s);
   const rPr = rPrMatch ? `<w:rPr>${rPrMatch[1]}</w:rPr>` : "";
-
   return `<w:ins w:id="${id}" w:author="${author}" w:date="${date}"><w:r>${rPr}<w:t xml:space="preserve">${escapeXml(newText)}</w:t></w:r></w:ins>`;
+}
+
+async function generateDocxBuffer(
+  originalBuffer: Buffer,
+  sentences: any[],
+  type: "clean" | "tracked"
+): Promise<Buffer> {
+  const zip = new AdmZip(originalBuffer);
+  const docEntry = zip.getEntry("word/document.xml");
+  if (!docEntry) throw new Error("Invalid DOCX file");
+
+  let docXml = docEntry.getData().toString("utf8");
+  const paragraphs = docXml.match(/<w:p[ >].*?<\/w:p>/gs) || [];
+
+  const changeMap = new Map<string, string>();
+  sentences.forEach((s: any) => {
+    if (s.changed && s.original && s.edited) {
+      changeMap.set(s.original.trim(), s.edited.trim());
+    }
+  });
+
+  let newDocXml = docXml;
+
+  paragraphs.forEach((para) => {
+    const paraText = extractTextFromXml(para).trim();
+    if (!paraText) return;
+
+    for (const [original, edited] of changeMap.entries()) {
+      if (paraText.includes(original.substring(0, 40))) {
+        if (type === "clean") {
+          const newPara = replaceTextInRuns(para, edited);
+          newDocXml = newDocXml.replace(para, newPara);
+        } else {
+          const deletedPart = wrapWithDeletion(para, "AIPR");
+          const insertedPart = wrapWithInsertion(para, edited, "AIPR");
+          const pPropsMatch = para.match(/(<w:pPr>.*?<\/w:pPr>)/s);
+          const pProps = pPropsMatch ? pPropsMatch[1] : "";
+          const openTag = para.match(/^<w:p[^>]*>/)?.[0] || "<w:p>";
+          const newPara = `${openTag}${pProps}${deletedPart
+            .replace(/^<w:p[^>]*>/, "")
+            .replace(/<\/w:p>$/, "")}${insertedPart}</w:p>`;
+          newDocXml = newDocXml.replace(para, newPara);
+        }
+        break;
+      }
+    }
+  });
+
+  zip.updateFile("word/document.xml", Buffer.from(newDocXml, "utf8"));
+  return zip.toBuffer();
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { fileUrl, sentences, title, type } = await request.json();
-    // type: "clean" or "tracked"
+    const { fileUrl, sentences, title, type, manuscriptId, userId } = await request.json();
 
-    if (!fileUrl || !sentences) {
+    if (!fileUrl || !sentences || !manuscriptId || !userId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    // Check if file already exists in Supabase
+    const columnName = type === "clean" ? "edited_file_url" : "tracked_file_url";
+    const { data: existing } = await supabase
+      .from("manuscripts")
+      .select(columnName)
+      .eq("id", manuscriptId)
+      .single();
+
+    const existingUrl = existing?.[columnName as keyof typeof existing];
+
+    if (existingUrl) {
+      // File already generated — serve directly from Supabase
+      const { data: fileData } = await supabase.storage
+        .from("manuscripts")
+        .download(existingUrl);
+
+      if (fileData) {
+        const arrayBuffer = await fileData.arrayBuffer();
+        const base64 = Buffer.from(arrayBuffer).toString("base64");
+        return NextResponse.json({ success: true, file: base64, cached: true });
+      }
     }
 
     // Download original file from Supabase
@@ -85,85 +144,42 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Could not download file" }, { status: 500 });
     }
 
-    // Load into AdmZip
     const arrayBuffer = await fileData.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const zip = new AdmZip(buffer);
+    const originalBuffer = Buffer.from(arrayBuffer);
 
-    // Get document.xml
-    const docEntry = zip.getEntry("word/document.xml");
-    if (!docEntry) {
-      return NextResponse.json({ error: "Invalid DOCX file" }, { status: 400 });
-    }
+    // Generate the DOCX
+    const outputBuffer = await generateDocxBuffer(originalBuffer, sentences, type);
 
-    let docXml = docEntry.getData().toString("utf8");
+    // Save to Supabase Storage
+    const suffix = type === "clean" ? "" : "-edit-PC";
+    const sanitizedTitle = title
+      .replace(/[^\x00-\x7F]/g, "")
+      .replace(/\s+/g, "_")
+      .replace(/[()]/g, "")
+      .slice(0, 50);
 
-    // Extract all paragraphs
-    const paragraphRegex = /<w:p[ >].*?<\/w:p>/gs;
-    const paragraphs = docXml.match(paragraphRegex) || [];
+    const outputPath = `${userId}/${manuscriptId}/${sanitizedTitle}${suffix}.docx`;
 
-    // Build a map of original text → edited text
-    const changeMap = new Map<string, string>();
-    sentences.forEach((s: any) => {
-      if (s.changed && s.original && s.edited) {
-        changeMap.set(s.original.trim(), s.edited.trim());
-      }
-    });
-
-    if (type === "clean") {
-      // Replace text in paragraphs — keep all formatting
-      let newDocXml = docXml;
-      paragraphs.forEach((para) => {
-        const paraText = extractTextFromXml(para).trim();
-        if (!paraText) return;
-
-        // Find matching sentence
-        for (const [original, edited] of changeMap.entries()) {
-          if (paraText.includes(original.substring(0, 40))) {
-            const newPara = replaceTextInRuns(para, edited);
-            newDocXml = newDocXml.replace(para, newPara);
-            break;
-          }
-        }
+    const { error: uploadError } = await supabase.storage
+      .from("manuscripts")
+      .upload(outputPath, outputBuffer, {
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        upsert: true,
       });
 
-      zip.updateFile("word/document.xml", Buffer.from(newDocXml, "utf8"));
-
-    } else if (type === "tracked") {
-      // Add tracked changes markup
-      let newDocXml = docXml;
-
-      paragraphs.forEach((para) => {
-        const paraText = extractTextFromXml(para).trim();
-        if (!paraText) return;
-
-        for (const [original, edited] of changeMap.entries()) {
-          if (paraText.includes(original.substring(0, 40))) {
-            // Create deletion of original + insertion of edited
-            const deletedPart = wrapWithDeletion(para, "AIPR");
-            const insertedPart = wrapWithInsertion(para, edited, "AIPR");
-
-            // Replace paragraph with del+ins version
-            const pPropsMatch = para.match(/(<w:pPr>.*?<\/w:pPr>)/s);
-            const pProps = pPropsMatch ? pPropsMatch[1] : "";
-
-            const openTag = para.match(/^<w:p[^>]*>/)?.[0] || "<w:p>";
-            const newPara = `${openTag}${pProps}${deletedPart.replace(/^<w:p[^>]*>/, "").replace(/<\/w:p>$/, "")}${insertedPart}</w:p>`;
-
-            newDocXml = newDocXml.replace(para, newPara);
-            break;
-          }
-        }
-      });
-
-      zip.updateFile("word/document.xml", Buffer.from(newDocXml, "utf8"));
+    if (uploadError) {
+      console.error("Upload error:", uploadError);
+    } else {
+      // Save file URL to manuscripts table
+      await supabase
+        .from("manuscripts")
+        .update({ [columnName]: outputPath })
+        .eq("id", manuscriptId);
     }
 
-    // Return as base64
-    const outputBuffer = zip.toBuffer();
+    // Return file as base64
     const base64 = outputBuffer.toString("base64");
-
-    return NextResponse.json({ success: true, file: base64 });
+    return NextResponse.json({ success: true, file: base64, cached: false });
 
   } catch (error: any) {
     console.error("DOCX generation error:", error);

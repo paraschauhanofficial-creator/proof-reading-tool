@@ -167,6 +167,7 @@ export default function ManuscriptPage() {
   const handleDownloadEdited = async () => {
   if (!result?.sentences || !manuscript?.original_file_url) return;
   try {
+    const { data: { user } } = await createClient().auth.getUser();
     const response = await fetch("/api/generate-docx", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -175,6 +176,8 @@ export default function ManuscriptPage() {
         sentences: result.sentences,
         title: manuscript.title,
         type: "clean",
+        manuscriptId: params.id,
+        userId: user?.id,
       }),
     });
     const { file } = await response.json();
@@ -186,7 +189,7 @@ export default function ManuscriptPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${manuscript.title}-edited.docx`;
+    a.download = `${manuscript.title}.docx`;
     a.click();
     URL.revokeObjectURL(url);
   } catch (error) {
@@ -197,6 +200,7 @@ export default function ManuscriptPage() {
 const handleDownloadTracked = async () => {
   if (!result?.sentences || !manuscript?.original_file_url) return;
   try {
+    const { data: { user } } = await createClient().auth.getUser();
     const response = await fetch("/api/generate-docx", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -205,6 +209,8 @@ const handleDownloadTracked = async () => {
         sentences: result.sentences,
         title: manuscript.title,
         type: "tracked",
+        manuscriptId: params.id,
+        userId: user?.id,
       }),
     });
     const { file } = await response.json();
