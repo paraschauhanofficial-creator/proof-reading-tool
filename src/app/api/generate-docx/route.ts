@@ -81,6 +81,15 @@ function stripBoldFromRPr(rPr: string): string {
     .replace(/<w:bCs\s*\/>/g, "");
 }
 
+// Build run props WITH bold added
+function addBoldToRPr(rPr: string): string {
+  const stripped = stripBoldFromRPr(rPr);
+  if (stripped.includes("<w:rPr>")) {
+    return stripped.replace("<w:rPr>", "<w:rPr><w:b/><w:bCs/>");
+  }
+  return "<w:rPr><w:b/><w:bCs/></w:rPr>";
+}
+
 const CHANGE_DATE = new Date().toISOString().split(".")[0] + "Z";
 let changeIdCounter = 1000;
 function nextId() { return changeIdCounter++; }
@@ -100,14 +109,54 @@ function makeDelRun(text: string, rPr: string, author: string): string {
   return `<w:del w:id="${nextId()}" w:author="${author}" w:date="${CHANGE_DATE}"><w:r>${rPr}<w:delText xml:space="preserve">${escapeXml(text)}</w:delText></w:r></w:del>`;
 }
 
+// Convert **bold** markdown segments in text into a mix of bold/non-bold INSERTED runs
+function makeInsRunsWithBold(text: string, rPr: string, author: string): string {
+  if (!text) return "";
+  const boldRPr = addBoldToRPr(rPr);
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  let runs = "";
+  for (const part of parts) {
+    if (!part) continue;
+    if (/^\*\*[^*]+\*\*$/.test(part)) {
+      const inner = part.replace(/\*\*/g, "");
+      runs += makeInsRun(inner, boldRPr, author);
+    } else {
+      runs += makeInsRun(part, rPr, author);
+    }
+  }
+  return runs;
+}
+
+// Same for normal (clean) runs
+function makeRunsWithBold(text: string, rPr: string): string {
+  if (!text) return "";
+  const boldRPr = addBoldToRPr(rPr);
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  let runs = "";
+  for (const part of parts) {
+    if (!part) continue;
+    if (/^\*\*[^*]+\*\*$/.test(part)) {
+      const inner = part.replace(/\*\*/g, "");
+      runs += makeRun(inner, boldRPr);
+    } else {
+      runs += makeRun(part, rPr);
+    }
+  }
+  return runs;
+}
+
 // BLOCK-LEVEL: strike whole original, insert whole edited (matches paste workflow)
 function generateBlockTracked(
   original: string,
   edited: string,
   rPr: string,
-  author: string = "AIPR"
+  author: string = "AIPR",
+  hasBoldMarkers: boolean = false
 ): string {
-  return makeDelRun(original, rPr, author) + makeInsRun(edited, rPr, author);
+  const insRuns = hasBoldMarkers
+    ? makeInsRunsWithBold(edited, rPr, author)
+    : makeInsRun(edited, rPr, author);
+  return makeDelRun(original, rPr, author) + insRuns;
 }
 
 // WORD-LEVEL: granular diff (matches Word Compare)
@@ -118,7 +167,8 @@ function generateWordTracked(
   author: string = "AIPR"
 ): string {
   const dmp = new diff_match_patch();
-  const diffs = dmp.diff_main(original, edited);
+  const cleanEdited = edited.replace(/\*\*/g, "");
+  const diffs = dmp.diff_main(original, cleanEdited);
   dmp.diff_cleanupSemantic(diffs);
 
   let runs = "";
@@ -242,20 +292,39 @@ function buildParagraphEdits(
     });
   }
 
-  // Abstract
+  // Abstract — supports labeled sections (Objective/Methods/Results/Conclusion)
   const abstractSents = bySection["abstract"] || [];
   if (abstractSents.length > 0) {
-    const firstKey = normalizeText(stripLabel(abstractSents[0].original || "")).substring(0, 50);
-    const editedCombined = abstractSents
-      .map((s: any) => stripLabel(s.edited || s.original || ""))
-      .join(" ")
-      .trim();
+    const originalEntry = abstractSents.find((s: any) => (s.original || "").trim().length > 40);
+    const firstKey = originalEntry
+      ? normalizeText(stripLabel(originalEntry.original || "")).substring(0, 50)
+      : normalizeText(stripLabel(abstractSents[0].original || "")).substring(0, 50);
+
+    const isLabeled = abstractSents.some((s: any) => s.isLabeledPart);
+    let editedCombined: string;
+    if (isLabeled) {
+      // Each labeled section on its own line, keeping **bold** markers
+      editedCombined = abstractSents
+        .map((s: any) => (s.edited || "").trim())
+        .filter(Boolean)
+        .join("\n");
+    } else {
+      editedCombined = abstractSents
+        .map((s: any) => stripLabel(s.edited || s.original || ""))
+        .join(" ")
+        .trim();
+    }
+
     paragraphs.forEach((para) => {
       const paraText = extractTextFromXml(para).trim();
       if (firstKey && normalizeText(paraText).includes(firstKey) && paraText.length > 80) {
         const labelMatch = paraText.match(/^(\[?abstract\]?[:\s]*)/i);
         const label = labelMatch ? labelMatch[1] : "";
-        map.set(para, { original: paraText, edited: `${label}${editedCombined}`, section: "abstract" });
+        map.set(para, {
+          original: paraText,
+          edited: `${label}${editedCombined}`,
+          section: "abstract",
+        });
       }
     });
   }
@@ -289,13 +358,13 @@ async function generateDocxBuffer(
     const pPr = getParagraphProps(para);
     const openTag = para.match(/^<w:p\b[^>]*>/)?.[0] || "<w:p>";
 
+    const hasBoldMarkers = edited.includes("**");
+
     let innerRuns: string;
     if (type === "editpc") {
-      // Word-level diff (Word Compare style)
       innerRuns = generateWordTracked(original, edited, rPr, "AIPR");
     } else {
-      // Block-level: strike whole original, insert whole edited (paste style)
-      innerRuns = generateBlockTracked(original, edited, rPr, "AIPR");
+      innerRuns = generateBlockTracked(original, edited, rPr, "AIPR", hasBoldMarkers);
     }
 
     const newPara = `${openTag}${pPr}${innerRuns}</w:p>`;
