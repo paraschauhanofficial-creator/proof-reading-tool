@@ -194,11 +194,10 @@ function detectIssues(sentences: any[]): { section: string; index: number; text:
 // Group body sentences into their original paragraphs by matching text
 function groupSentencesByParagraph(sentences: any[], rawBody: string): any[][] {
   if (!rawBody) return sentences.map((s: any) => [s]); // fallback: one per group
-  // Body was joined with single newlines where each line was a separate paragraph in the doc.
-  // Split on single newlines first; if that yields too few, fall back to double-newline.
-  let paragraphs = rawBody.split(/\n+/).map(p => p.trim()).filter(p => p.length > 0);
+  // Split on double-newlines (real paragraph breaks). Fall back to single if none found.
+  let paragraphs = rawBody.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
   if (paragraphs.length <= 1) {
-    paragraphs = rawBody.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+    paragraphs = rawBody.split(/\n+/).map(p => p.trim()).filter(p => p.length > 0);
   }
   if (paragraphs.length === 0) return sentences.map((s: any) => [s]);
 
@@ -278,8 +277,7 @@ export default function ManuscriptPage() {
       const rawText = sessionStorage.getItem(`text_${params.id}`);
       if (rawText) {
         setRawSections(parseDocumentSections(rawText));
-        const ps = parseDocumentSections(rawText);
-        setRawBodyText(ps?.body || rawText);
+        setRawBodyText(rawText);
       }
     } catch {
       sessionStorage.removeItem(`result_${params.id}`);
