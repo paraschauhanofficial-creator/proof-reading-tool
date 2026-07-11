@@ -89,6 +89,49 @@ function addBoldToRPr(rPr: string): string {
   return "<w:rPr><w:b/><w:bCs/></w:rPr>";
 }
 
+function addItalicToRPr(rPr: string): string {
+  // remove existing italic then add
+  let base = rPr
+    .replace(/<w:i\/>/g, "")
+    .replace(/<w:i\s*\/>/g, "")
+    .replace(/<w:iCs\/>/g, "")
+    .replace(/<w:iCs\s*\/>/g, "");
+  if (base.includes("<w:rPr>")) {
+    return base.replace("<w:rPr>", "<w:rPr><w:i/><w:iCs/>");
+  }
+  return "<w:rPr><w:i/><w:iCs/></w:rPr>";
+}
+
+// ---- FORMATTING ANALYSIS ----
+// Determine if a paragraph is predominantly bold (heading/subheading)
+function isParagraphBold(paragraphXml: string): boolean {
+  const runs = paragraphXml.match(/<w:r\b[^>]*>.*?<\/w:r>/gs) || [];
+  if (runs.length === 0) return false;
+  let boldRuns = 0;
+  let textRuns = 0;
+  for (const r of runs) {
+    if (!/<w:t[^>]*>/.test(r)) continue;
+    textRuns++;
+    if (/<w:b\/>|<w:b\s*\/>|<w:b>/.test(r)) boldRuns++;
+  }
+  if (textRuns === 0) return false;
+  return boldRuns / textRuns >= 0.6; // 60%+ of text runs bold => treat as bold paragraph
+}
+
+function isHeadingParagraph(paragraphXml: string): boolean {
+  return (
+    /<w:pStyle w:val="[^"]*[Hh]eading[^"]*"/.test(paragraphXml) ||
+    /<w:pStyle w:val="[^"]*[Tt]itle[^"]*"/.test(paragraphXml)
+  );
+}
+
+// A short bold paragraph is very likely a subheading (e.g., "2.1 Study patients")
+function looksLikeSubheading(paragraphXml: string, text: string): boolean {
+  if (!text) return false;
+  const wordCount = text.split(/\s+/).length;
+  return wordCount <= 12 && (isParagraphBold(paragraphXml) || isHeadingParagraph(paragraphXml));
+}
+
 const CHANGE_DATE = new Date().toISOString().split(".")[0] + "Z";
 let changeIdCounter = 1000;
 function nextId() { return changeIdCounter++; }
@@ -108,35 +151,77 @@ function makeDelRun(text: string, rPr: string, author: string): string {
   return `<w:del w:id="${nextId()}" w:author="${author}" w:date="${CHANGE_DATE}"><w:r>${rPr}<w:delText xml:space="preserve">${escapeXml(text)}</w:delText></w:r></w:del>`;
 }
 
-function makeInsRunsWithBold(text: string, rPr: string, author: string): string {
-  if (!text) return "";
-  const boldRPr = addBoldToRPr(rPr);
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  let runs = "";
-  for (const part of parts) {
-    if (!part) continue;
-    if (/^\*\*[^*]+\*\*$/.test(part)) {
-      runs += makeInsRun(part.replace(/\*\*/g, ""), boldRPr, author);
+// Split text into styled segments based on markers:
+//   **bold**  -> bold
+//   *italic*  -> italic (genes, species, stat symbols)
+// Returns array of { text, bold, italic }
+function parseStyledSegments(text: string): { text: string; bold: boolean; italic: boolean }[] {
+  const segments: { text: string; bold: boolean; italic: boolean }[] = [];
+  // First split on bold (**...**), then within non-bold parts split on italic (*...*)
+  const boldParts = text.split(/(\*\*[^*]+\*\*)/g);
+  for (const bp of boldParts) {
+    if (!bp) continue;
+    if (/^\*\*[^*]+\*\*$/.test(bp)) {
+      segments.push({ text: bp.replace(/\*\*/g, ""), bold: true, italic: false });
     } else {
-      runs += makeInsRun(part, rPr, author);
+      // split on single-asterisk italic
+      const italParts = bp.split(/(\*[^*]+\*)/g);
+      for (const ip of italParts) {
+        if (!ip) continue;
+        if (/^\*[^*]+\*$/.test(ip)) {
+          segments.push({ text: ip.replace(/\*/g, ""), bold: false, italic: true });
+        } else {
+          segments.push({ text: ip, bold: false, italic: false });
+        }
+      }
     }
   }
-  return runs;
+  return segments;
 }
 
+// Build inserted runs applying bold/italic from markers, on top of a base rPr
+function makeStyledInsRuns(text: string, baseRPr: string, author: string): string {
+  const segments = parseStyledSegments(text);
+  let runs = "";
+  for (const seg of segments) {
+    if (!seg.text) continue;
+    let rPr = baseRPr;
+    if (seg.bold) rPr = addBoldToRPr(rPr);
+    if (seg.italic) rPr = addItalicToRPr(rPr);
+    runs += makeInsRun(seg.text, rPr, author);
+  }
+  return runs || makeInsRun(text.replace(/\*/g, ""), baseRPr, author);
+}
+
+// Build clean (non-tracked) runs applying bold/italic from markers
+function makeStyledRuns(text: string, baseRPr: string): string {
+  const segments = parseStyledSegments(text);
+  let runs = "";
+  for (const seg of segments) {
+    if (!seg.text) continue;
+    let rPr = baseRPr;
+    if (seg.bold) rPr = addBoldToRPr(rPr);
+    if (seg.italic) rPr = addItalicToRPr(rPr);
+    runs += makeRun(seg.text, rPr);
+  }
+  return runs || makeRun(text.replace(/\*/g, ""), baseRPr);
+}
+
+// BLOCK-LEVEL tracked: strike whole original, insert whole edited (styled)
 function generateBlockTracked(
   original: string,
   edited: string,
   rPr: string,
   author: string = "AIPR",
-  hasBoldMarkers: boolean = false
+  hasMarkers: boolean = false
 ): string {
-  const insRuns = hasBoldMarkers
-    ? makeInsRunsWithBold(edited, rPr, author)
+  const insRuns = hasMarkers
+    ? makeStyledInsRuns(edited, rPr, author)
     : makeInsRun(edited, rPr, author);
   return makeDelRun(original, rPr, author) + insRuns;
 }
 
+// WORD-LEVEL tracked: granular diff (edit-PC style)
 function generateWordTracked(
   original: string,
   edited: string,
@@ -144,7 +229,7 @@ function generateWordTracked(
   author: string = "AIPR"
 ): string {
   const dmp = new diff_match_patch();
-  const cleanEdited = edited.replace(/\*\*/g, "");
+  const cleanEdited = edited.replace(/\*/g, "");
   const diffs = dmp.diff_main(original, cleanEdited);
   dmp.diff_cleanupSemantic(diffs);
   let runs = "";
@@ -167,13 +252,6 @@ function deriveOutputFilename(originalFileUrl: string, type: "edited" | "editpc"
   } else {
     return `${base.replace(/-org$/i, "")}-edit-PC.docx`;
   }
-}
-
-function isHeadingParagraph(paragraphXml: string): boolean {
-  return (
-    /<w:pStyle w:val="[^"]*[Hh]eading[^"]*"/.test(paragraphXml) ||
-    /<w:pStyle w:val="[^"]*[Tt]itle[^"]*"/.test(paragraphXml)
-  );
 }
 
 function buildParagraphEdits(
@@ -225,7 +303,6 @@ function buildParagraphEdits(
   });
 
   // Title — match the FIRST paragraph that contains the title text
-  // (title paragraphs often have NO heading style, so do not require it)
   const titleSents = bySection["title"] || [];
   if (titleSents.length > 0 && titleSents[0].changed) {
     const tOrig = stripLabel(titleSents[0].original || "");
@@ -237,7 +314,7 @@ function buildParagraphEdits(
       const paraNorm = normalizeText(paraText);
       if (tKey && (paraNorm.includes(tKey) || tKey.includes(paraNorm.substring(0, 40)))) {
         map.set(para, { original: paraText, edited: tEdit, section: "title" });
-        break; // only the first match (the real title)
+        break;
       }
     }
   }
@@ -328,20 +405,31 @@ async function generateDocxBuffer(
   editsMap.forEach(({ original, edited, section }, para) => {
     if (!edited || original === edited) return;
 
+    // ---- FORMATTING PRESERVATION ----
     let rPr = getFirstRunProps(para);
-    const shouldStripBold =
-      ["abstract", "keywords", "body"].includes(section) && !isHeadingParagraph(para);
-    if (shouldStripBold) rPr = stripBoldFromRPr(rPr);
+    const paraIsBold = isParagraphBold(para);
+    const isHeading = isHeadingParagraph(para);
+    const isSubheading = looksLikeSubheading(para, original);
+    const isTitleOrHeadingSection =
+      section === "title" || section === "running_title";
+
+    // Keep bold for: title, headings, subheadings. Strip bold for normal body/abstract/keywords.
+    const keepBold = isTitleOrHeadingSection || isHeading || isSubheading || paraIsBold;
+    if (!keepBold) {
+      rPr = stripBoldFromRPr(rPr);
+    } else {
+      rPr = addBoldToRPr(rPr);
+    }
 
     const pPr = getParagraphProps(para);
     const openTag = para.match(/^<w:p\b[^>]*>/)?.[0] || "<w:p>";
-    const hasBoldMarkers = edited.includes("**");
+    const hasMarkers = /\*/.test(edited); // contains bold/italic markers
 
     let innerRuns: string;
     if (type === "editpc") {
       innerRuns = generateWordTracked(original, edited, rPr, "AIPR");
     } else {
-      innerRuns = generateBlockTracked(original, edited, rPr, "AIPR", hasBoldMarkers);
+      innerRuns = generateBlockTracked(original, edited, rPr, "AIPR", hasMarkers);
     }
 
     const newPara = `${openTag}${pPr}${innerRuns}</w:p>`;

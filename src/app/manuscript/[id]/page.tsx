@@ -129,6 +129,105 @@ function parseDocumentSections(text: string) {
   return { title, runningTitle, abstract, keywords, body, references };
 }
 
+// Word-level diff for Compare View (mimics edit-PC / Word Compare output)
+function wordDiff(original: string, edited: string): { type: "same" | "del" | "ins"; text: string }[] {
+  const o = original.split(/(\s+)/);
+  const e = edited.split(/(\s+)/);
+  // Simple LCS-based diff
+  const m = o.length, n = e.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (o[i] === e[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const result: { type: "same" | "del" | "ins"; text: string }[] = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (o[i] === e[j]) { result.push({ type: "same", text: o[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { result.push({ type: "del", text: o[i] }); i++; }
+    else { result.push({ type: "ins", text: e[j] }); j++; }
+  }
+  while (i < m) { result.push({ type: "del", text: o[i] }); i++; }
+  while (j < n) { result.push({ type: "ins", text: e[j] }); j++; }
+  return result;
+}
+
+// Detect content issues in edited text (flags for manual review)
+const ISSUE_PATTERNS: { label: string; category: string; test: RegExp }[] = [
+  { label: '"suggest" \u2192 should be "indicate"', category: "term", test: /\bsuggest(s|ed|ing)?\b/i },
+  { label: '"subject(s)" \u2192 use patient/individual/participant', category: "term", test: /\bsubjects?\b/i },
+  { label: '"show/showed" \u2192 demonstrate/present', category: "term", test: /\bshow(s|ed|n)?\b/i },
+  { label: '"death(s)" \u2192 mortality/fatality', category: "term", test: /\bdeaths?\b/i },
+  { label: '"elderly" \u2192 older adults', category: "term", test: /\belderly\b/i },
+  { label: '"robust" \u2192 reliable', category: "term", test: /\brobust\b/i },
+  { label: 'first-person (we/our/us/I)', category: "person", test: /\b(we|our|us)\b/i },
+  { label: '"males/females" \u2192 men/women', category: "term", test: /\b(males|females)\b/i },
+  { label: 'P= without italic/spacing', category: "apa", test: /\bP\s*=\s*0/i },
+  { label: '95%CI without space', category: "apa", test: /95%CI/i },
+  { label: 'citation after period (.[n])', category: "cite", test: /\.\s*\[\d/i },
+  { label: 'comma-space in citation [n, n]', category: "cite", test: /\[\d+,\s+\d/i },
+  { label: 'temperature without space (36\u00b0C)', category: "apa", test: /\d\u00b0C/i },
+];
+
+function detectIssues(sentences: any[]): { section: string; index: number; text: string; issues: string[] }[] {
+  const flags: { section: string; index: number; text: string; issues: string[] }[] = [];
+  const counters: Record<string, number> = {};
+  sentences.forEach((s: any) => {
+    const section = s.section || "body";
+    if (counters[section] === undefined) counters[section] = -1;
+    counters[section]++;
+    const text = s.edited || "";
+    if (!text || !s.changed) return;
+    const found: string[] = [];
+    for (const p of ISSUE_PATTERNS) {
+      if (p.test.test(text)) found.push(p.label);
+    }
+    if (found.length > 0) {
+      flags.push({ section, index: counters[section], text, issues: found });
+    }
+  });
+  return flags;
+}
+
+// Group body sentences into their original paragraphs by matching text
+function groupSentencesByParagraph(sentences: any[], rawBody: string): any[][] {
+  if (!rawBody) return sentences.map((s: any) => [s]); // fallback: one per group
+  // Body was joined with single newlines where each line was a separate paragraph in the doc.
+  // Split on single newlines first; if that yields too few, fall back to double-newline.
+  let paragraphs = rawBody.split(/\n+/).map(p => p.trim()).filter(p => p.length > 0);
+  if (paragraphs.length <= 1) {
+    paragraphs = rawBody.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+  }
+  if (paragraphs.length === 0) return sentences.map((s: any) => [s]);
+
+  const normalize = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
+  const paraNorms = paragraphs.map(normalize);
+
+  // Assign each sentence to the paragraph that contains its original text
+  const groups: any[][] = paragraphs.map(() => []);
+  const unassigned: any[] = [];
+
+  sentences.forEach((s: any) => {
+    const orig = normalize(s.original || "");
+    if (!orig || orig.length < 8) { unassigned.push(s); return; }
+    const key = orig.substring(0, 40);
+    let found = -1;
+    for (let p = 0; p < paraNorms.length; p++) {
+      if (paraNorms[p].includes(key)) { found = p; break; }
+    }
+    if (found >= 0) groups[found].push(s);
+    else unassigned.push(s);
+  });
+
+  // Build result: only non-empty groups, in order; append unassigned as their own groups
+  const result: any[][] = [];
+  groups.forEach(g => { if (g.length > 0) result.push(g); });
+  unassigned.forEach(s => result.push([s]));
+  return result.length > 0 ? result : sentences.map((s: any) => [s]);
+}
+
 function extractSectionFromSentences(sentences: any[], section: string) {
   return sentences.filter((s: any) => s.section === section);
 }
@@ -145,6 +244,13 @@ export default function ManuscriptPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<string>("");
+  const [viewMode, setViewMode] = useState<"edited" | "compare">("edited");
+  const [showFlags, setShowFlags] = useState(true);
+  const [reeditKey, setReeditKey] = useState<string | null>(null);
+  const [reeditInstruction, setReeditInstruction] = useState<string>("");
+  const [reeditLoading, setReeditLoading] = useState(false);
+  const [groupMode, setGroupMode] = useState<"paragraph" | "sentence">("paragraph");
+  const [rawBodyText, setRawBodyText] = useState<string>("");
 
   const router = useRouter();
   const params = useParams();
@@ -170,7 +276,11 @@ export default function ManuscriptPage() {
       const cached = sessionStorage.getItem(`result_${params.id}`);
       if (cached) setResult(JSON.parse(cached));
       const rawText = sessionStorage.getItem(`text_${params.id}`);
-      if (rawText) setRawSections(parseDocumentSections(rawText));
+      if (rawText) {
+        setRawSections(parseDocumentSections(rawText));
+        const ps = parseDocumentSections(rawText);
+        setRawBodyText(ps?.body || rawText);
+      }
     } catch {
       sessionStorage.removeItem(`result_${params.id}`);
     }
@@ -359,6 +469,70 @@ export default function ManuscriptPage() {
     setEditDraft(currentText);
   };
 
+  // Paragraph-aware save: replace all sentences of a paragraph (identified by their originals) with one edited block
+  const saveParaEdit = (firstIdx: number, paraSentenceOriginals: string[], newText: string) => {
+    setResult((prev: any) => {
+      if (!prev?.sentences) return prev;
+      const origSet = new Set(paraSentenceOriginals.map((o: string) => (o || "").trim()));
+      const newSentences: any[] = [];
+      let inserted = false;
+      let bodyCounter = -1;
+      for (const s of prev.sentences) {
+        const sSection = s.section || "body";
+        if (sSection === "body") {
+          bodyCounter++;
+          if (origSet.has((s.original || "").trim())) {
+            // Replace the whole paragraph with a single combined sentence on first hit
+            if (!inserted) {
+              newSentences.push({
+                ...s,
+                original: paraSentenceOriginals.join(" ").trim(),
+                edited: newText,
+                changed: paraSentenceOriginals.join(" ").trim() !== newText.trim(),
+                qaEdited: true,
+              });
+              inserted = true;
+            }
+            // skip the other sentences of this paragraph
+            continue;
+          }
+        }
+        newSentences.push(s);
+      }
+      const updated = { ...prev, sentences: newSentences };
+      try { sessionStorage.setItem(`result_${params.id}`, JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+    setEditingKey(null);
+    setEditDraft("");
+  };
+
+  // Re-edit a single sentence via AI (with optional custom instruction)
+  const reeditSentence = async (section: string, index: number, original: string, currentEdit: string) => {
+    setReeditLoading(true);
+    try {
+      const response = await fetch("/api/reedit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          original,
+          currentEdit,
+          instruction: reeditInstruction,
+          section,
+        }),
+      });
+      const data = await response.json();
+      if (data?.edited) {
+        saveEdit(section, index, data.edited);
+      }
+    } catch (e) {
+      console.error("Re-edit failed:", e);
+    }
+    setReeditLoading(false);
+    setReeditKey(null);
+    setReeditInstruction("");
+  };
+
   const stageIndex = manuscript ? getStageIndex(manuscript.status) : 0;
 
   const sidebarStageColor = (i: number) => {
@@ -376,6 +550,7 @@ export default function ManuscriptPage() {
   const bodySentences = allSentences.filter(
     (s: any) => s.section === "body" || !s.section
   );
+  const bodyParagraphs = groupSentencesByParagraph(bodySentences, rawBodyText);
 
   // Title
   const titleOriginal = stripLabel(titleSentences[0]?.original || rawSections?.title || manuscript?.title || "");
@@ -403,6 +578,7 @@ export default function ManuscriptPage() {
     keywordsOriginal.trim() !== keywordsEdited.trim();
 
   const changedCount = allSentences.filter((s: any) => s.changed).length;
+  const reviewFlags = manuscript?.status === "completed" ? detectIssues(allSentences) : [];
   const isShowingDocument = ["processing", "rechecking", "completed"].includes(manuscript?.status);
   const displayTitle = titleEdited || titleOriginal || manuscript?.title;
 
@@ -442,12 +618,124 @@ export default function ManuscriptPage() {
     color: "var(--text-secondary)", marginBottom: "3px", wordBreak: "break-word",
   };
 
+  // Compare View renderer — word-level diff like edit-PC
+  const renderCompare = (original: string, edited: string) => {
+    const parts = wordDiff(original, stripLabel(edited));
+    return (
+      <div style={{
+        fontSize: "clamp(12px, 1.5vw, 13px)", lineHeight: 1.9,
+        padding: "10px 14px", borderRadius: "6px",
+        backgroundColor: "var(--bg-card)", border: "1px solid var(--border)",
+        marginBottom: "6px", wordBreak: "break-word",
+      }}>
+        {parts.map((p, i) => {
+          if (p.type === "same") return <span key={i} style={{ color: "var(--text-primary)" }}>{p.text}</span>;
+          if (p.type === "del") return <span key={i} style={{ color: "#f87171", textDecoration: "line-through" }}>{p.text}</span>;
+          return <span key={i} style={{ color: "#4ade80", textDecoration: "underline" }}>{p.text}</span>;
+        })}
+      </div>
+    );
+  };
+
+  // Paragraph editable box — edits the whole paragraph, saves via saveParaEdit
+  const renderEditablePara = (firstIdx: number, paraOriginals: string[], text: string) => {
+    const key = `para-${firstIdx}`;
+    const isEditing = editingKey === key;
+    if (isEditing) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "3px" }}>
+          <textarea
+            value={editDraft}
+            onChange={(e) => setEditDraft(e.target.value)}
+            autoFocus
+            style={{
+              width: "100%", minHeight: "120px", fontSize: "clamp(12px, 1.5vw, 13px)",
+              lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px",
+              backgroundColor: "rgba(34,197,94,0.06)", border: "1px solid #22c55e",
+              color: "var(--text-primary)", outline: "none", resize: "vertical",
+              fontFamily: "inherit", boxSizing: "border-box",
+            }}
+          />
+          <div style={{ display: "flex", gap: "6px" }}>
+            <button onClick={() => saveParaEdit(firstIdx, paraOriginals, editDraft)} style={{
+              fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+              border: "none", backgroundColor: "#22c55e", color: "#fff", cursor: "pointer",
+            }}>Save</button>
+            <button onClick={() => { setEditingKey(null); setEditDraft(""); }} style={{
+              fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+              border: "1px solid var(--border)", backgroundColor: "var(--bg)",
+              color: "var(--text-secondary)", cursor: "pointer",
+            }}>Cancel</button>
+          </div>
+        </div>
+      );
+    }
+    const isReediting = reeditKey === key;
+    return (
+      <div style={{ marginBottom: "3px" }}>
+        <div style={{ ...EDITED, position: "relative", display: "flex", alignItems: "flex-start", gap: "8px" }}>
+          <div onClick={() => beginEdit(key, text)} title="Click to edit paragraph" style={{ flex: 1, cursor: "text" }}>{text}</div>
+          <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
+            <button onClick={() => beginEdit(key, text)} title="Edit manually" style={{
+              background: "transparent", border: "none", cursor: "pointer", fontSize: "12px", color: "var(--text-muted)", padding: "0 2px",
+            }}>✎</button>
+            <button onClick={() => { setReeditKey(isReediting ? null : key); setReeditInstruction(""); }} title="Re-edit with AI" style={{
+              background: "transparent", border: "none", cursor: "pointer", fontSize: "12px",
+              color: isReediting ? "var(--accent)" : "var(--text-muted)", padding: "0 2px",
+            }}>↻</button>
+          </div>
+        </div>
+        {isReediting && (
+          <div style={{
+            marginTop: "4px", padding: "10px 12px", borderRadius: "8px",
+            backgroundColor: "var(--accent-light)", border: "1px solid var(--accent-border)",
+            display: "flex", flexDirection: "column", gap: "8px",
+          }}>
+            <input type="text" value={reeditInstruction} onChange={(e) => setReeditInstruction(e.target.value)}
+              placeholder="Optional instruction (e.g. 'make more concise')"
+              style={{
+                width: "100%", fontSize: "12px", padding: "6px 10px", borderRadius: "6px",
+                backgroundColor: "var(--bg)", border: "1px solid var(--border)",
+                color: "var(--text-primary)", outline: "none", boxSizing: "border-box",
+              }} />
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button disabled={reeditLoading}
+                onClick={async () => {
+                  setReeditLoading(true);
+                  try {
+                    const response = await fetch("/api/reedit", {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ original: paraOriginals.join(" "), currentEdit: text, instruction: reeditInstruction, section: "paragraph" }),
+                    });
+                    const data = await response.json();
+                    if (data?.edited) saveParaEdit(firstIdx, paraOriginals, data.edited);
+                  } catch (e) { console.error(e); }
+                  setReeditLoading(false); setReeditKey(null); setReeditInstruction("");
+                }}
+                style={{
+                  fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                  border: "none", backgroundColor: "var(--accent)", color: "#fff",
+                  cursor: reeditLoading ? "wait" : "pointer", opacity: reeditLoading ? 0.6 : 1,
+                }}>{reeditLoading ? "Re-editing..." : "↻ Re-edit with AI"}</button>
+              <button onClick={() => { setReeditKey(null); setReeditInstruction(""); }} style={{
+                fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                border: "1px solid var(--border)", backgroundColor: "var(--bg)",
+                color: "var(--text-secondary)", cursor: "pointer",
+              }}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Editable green box — click to edit the AI's edited text for QA
   const renderEditableGreen = (
     section: string,
     index: number,
     text: string,
-    extraStyle: React.CSSProperties = {}
+    extraStyle: React.CSSProperties = {},
+    originalText: string = ""
   ) => {
     const key = `${section}-${index}`;
     const isEditing = editingKey === key;
@@ -486,17 +774,77 @@ export default function ManuscriptPage() {
         </div>
       );
     }
+    // Re-edit panel open for this sentence
+    const isReediting = reeditKey === key;
+
     return (
-      <div
-        onClick={() => beginEdit(key, text)}
-        title="Click to edit"
-        style={{ ...EDITED, ...extraStyle, cursor: "text", position: "relative" }}
-      >
-        {text}
-        <span style={{
-          marginLeft: "8px", fontSize: "10px", color: "var(--text-muted)",
-          opacity: 0.6,
-        }}>✎</span>
+      <div style={{ marginBottom: "3px" }}>
+        <div style={{ ...EDITED, ...extraStyle, position: "relative", display: "flex", alignItems: "flex-start", gap: "8px" }}>
+          <div
+            onClick={() => beginEdit(key, text)}
+            title="Click to edit"
+            style={{ flex: 1, cursor: "text" }}
+          >
+            {text}
+          </div>
+          <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
+            <button
+              onClick={() => beginEdit(key, text)}
+              title="Edit manually"
+              style={{
+                background: "transparent", border: "none", cursor: "pointer",
+                fontSize: "12px", color: "var(--text-muted)", padding: "0 2px",
+              }}
+            >✎</button>
+            <button
+              onClick={() => { setReeditKey(isReediting ? null : key); setReeditInstruction(""); }}
+              title="Re-edit with AI"
+              style={{
+                background: "transparent", border: "none", cursor: "pointer",
+                fontSize: "12px", color: isReediting ? "var(--accent)" : "var(--text-muted)", padding: "0 2px",
+              }}
+            >↻</button>
+          </div>
+        </div>
+
+        {isReediting && (
+          <div style={{
+            marginTop: "4px", padding: "10px 12px", borderRadius: "8px",
+            backgroundColor: "var(--accent-light)", border: "1px solid var(--accent-border)",
+            display: "flex", flexDirection: "column", gap: "8px",
+          }}>
+            <input
+              type="text"
+              value={reeditInstruction}
+              onChange={(e) => setReeditInstruction(e.target.value)}
+              placeholder="Optional instruction (e.g. 'make more concise', 'simplify')"
+              style={{
+                width: "100%", fontSize: "12px", padding: "6px 10px", borderRadius: "6px",
+                backgroundColor: "var(--bg)", border: "1px solid var(--border)",
+                color: "var(--text-primary)", outline: "none", boxSizing: "border-box",
+              }}
+            />
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button
+                disabled={reeditLoading}
+                onClick={() => reeditSentence(section, index, originalText || text, text)}
+                style={{
+                  fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                  border: "none", backgroundColor: "var(--accent)", color: "#fff",
+                  cursor: reeditLoading ? "wait" : "pointer", opacity: reeditLoading ? 0.6 : 1,
+                }}
+              >{reeditLoading ? "Re-editing..." : "↻ Re-edit with AI"}</button>
+              <button
+                onClick={() => { setReeditKey(null); setReeditInstruction(""); }}
+                style={{
+                  fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                  border: "1px solid var(--border)", backgroundColor: "var(--bg)",
+                  color: "var(--text-secondary)", cursor: "pointer",
+                }}
+              >Cancel</button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -586,6 +934,46 @@ export default function ManuscriptPage() {
                   <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-primary)" }}>{item.value ?? 0}</span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Review Flags */}
+          {manuscript?.status === "completed" && reviewFlags.length > 0 && (
+            <div style={{ marginTop: "16px", borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <p style={{ fontSize: "10px", fontWeight: 600, color: "#f59e0b", textTransform: "uppercase", letterSpacing: "0.6px" }}>
+                  \u26a0 Review flags ({reviewFlags.length})
+                </p>
+                <button onClick={() => setShowFlags(!showFlags)} style={{
+                  background: "transparent", border: "1px solid var(--border)", borderRadius: "6px",
+                  padding: "1px 6px", cursor: "pointer", fontSize: "10px", color: "var(--text-muted)",
+                }}>{showFlags ? "hide" : "show"}</button>
+              </div>
+              {showFlags && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  {reviewFlags.map((f, i) => (
+                    <div
+                      key={i}
+                      onClick={() => {
+                        const el = document.getElementById(`sent-${f.section}-${f.index}`);
+                        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+                      }}
+                      style={{
+                        fontSize: "10px", padding: "6px 8px", borderRadius: "6px",
+                        backgroundColor: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <div style={{ color: "#f59e0b", fontWeight: 500, marginBottom: "2px", textTransform: "capitalize" }}>
+                        {f.section} #{f.index + 1}
+                      </div>
+                      {f.issues.map((iss, k) => (
+                        <div key={k} style={{ color: "var(--text-secondary)", lineHeight: 1.5 }}>\u2022 {iss}</div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -743,7 +1131,9 @@ export default function ManuscriptPage() {
                 {/* TITLE */}
                 <p style={SECTION_LABEL}>Title</p>
                 {titleChanged ? (
-                  <><div style={ORIGINAL}>{titleOriginal}</div>{renderEditableGreen("title", 0, titleEdited)}</>
+                  viewMode === "compare" ? renderCompare(titleOriginal, titleEdited) : (
+                    <><div style={ORIGINAL}>{titleOriginal}</div>{renderEditableGreen("title", 0, titleEdited, {}, titleOriginal)}</>
+                  )
                 ) : (
                   <div style={{ ...UNCHANGED, fontWeight: 600 }}>{titleOriginal}</div>
                 )}
@@ -752,7 +1142,9 @@ export default function ManuscriptPage() {
                 {runningTitleOriginal && (<>
                   <p style={SECTION_LABEL}>Running title</p>
                   {runningTitleChanged ? (
-                    <><div style={ORIGINAL}>{runningTitleOriginal}</div>{renderEditableGreen("running_title", 0, runningTitleEdited)}</>
+                    viewMode === "compare" ? renderCompare(runningTitleOriginal, runningTitleEdited) : (
+                      <><div style={ORIGINAL}>{runningTitleOriginal}</div>{renderEditableGreen("running_title", 0, runningTitleEdited, {}, runningTitleOriginal)}</>
+                    )
                   ) : (
                     <div style={UNCHANGED}>{runningTitleOriginal}</div>
                   )}
@@ -762,7 +1154,9 @@ export default function ManuscriptPage() {
                 {abstractOriginal && (<>
                   <p style={SECTION_LABEL}>Abstract</p>
                   {abstractChanged ? (
-                    <><div style={ORIGINAL}>{abstractOriginal}</div>{renderEditableGreen("abstract", 0, abstractEdited)}</>
+                    viewMode === "compare" ? renderCompare(abstractOriginal, abstractEdited) : (
+                      <><div style={ORIGINAL}>{abstractOriginal}</div>{renderEditableGreen("abstract", 0, abstractEdited, {}, abstractOriginal)}</>
+                    )
                   ) : (
                     <div style={UNCHANGED}>{abstractOriginal}</div>
                   )}
@@ -772,7 +1166,9 @@ export default function ManuscriptPage() {
                 {keywordsOriginal && (<>
                   <p style={SECTION_LABEL}>Keywords</p>
                   {keywordsChanged ? (
-                    <><div style={ORIGINAL}>{keywordsOriginal}</div>{renderEditableGreen("keywords", 0, keywordsEdited)}</>
+                    viewMode === "compare" ? renderCompare(keywordsOriginal, keywordsEdited) : (
+                      <><div style={ORIGINAL}>{keywordsOriginal}</div>{renderEditableGreen("keywords", 0, keywordsEdited, {}, keywordsOriginal)}</>
+                    )
                   ) : (
                     <div style={UNCHANGED}>{keywordsEdited}</div>
                   )}
@@ -781,18 +1177,54 @@ export default function ManuscriptPage() {
                 {/* BODY */}
                 {bodySentences.length > 0 && (<>
                   <p style={SECTION_LABEL}>Document body — {changedCount} edits</p>
-                  <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                    {bodySentences.map((s: any, i: number) => (
-                      s.changed ? (
-                        <div key={i}>
-                          <div style={ORIGINAL}>{s.original}</div>
-                          {renderEditableGreen("body", i, s.edited)}
-                        </div>
-                      ) : (
-                        <div key={i} style={UNCHANGED}>{s.original}</div>
-                      )
-                    ))}
-                  </div>
+
+                  {groupMode === "sentence" ? (
+                    /* SENTENCE MODE — one box per sentence */
+                    <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                      {bodySentences.map((s: any, i: number) => (
+                        s.changed ? (
+                          <div key={i} id={`sent-body-${i}`}>
+                            {viewMode === "compare" ? (
+                              renderCompare(s.original, s.edited)
+                            ) : (
+                              <>
+                                <div style={ORIGINAL}>{s.original}</div>
+                                {renderEditableGreen("body", i, s.edited, {}, s.original)}
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <div key={i} id={`sent-body-${i}`} style={UNCHANGED}>{s.original}</div>
+                        )
+                      ))}
+                    </div>
+                  ) : (
+                    /* PARAGRAPH MODE — group sentences into original paragraphs */
+                    <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                      {bodyParagraphs.map((para: any[], pi: number) => {
+                        const paraOriginal = para.map((s: any) => s.original || "").join(" ").trim();
+                        const paraEdited = para.map((s: any) => s.edited || s.original || "").join(" ").trim();
+                        const paraChanged = para.some((s: any) => s.changed);
+                        // global index of first sentence in this paragraph (for edit key)
+                        const firstIdx = bodySentences.indexOf(para[0]);
+                        const paraOriginals = para.map((s: any) => s.original || "");
+                        return (
+                          <div key={pi} id={`sent-body-${firstIdx}`}>
+                            {!paraChanged ? (
+                              <div style={UNCHANGED}>{paraOriginal}</div>
+                            ) : viewMode === "compare" ? (
+                              renderCompare(paraOriginal, paraEdited)
+                            ) : (
+                              <>
+                                <div style={ORIGINAL}>{paraOriginal}</div>
+                                {renderEditablePara(firstIdx, paraOriginals, paraEdited)}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </>)}
 
                 {/* REFERENCES */}
@@ -834,9 +1266,49 @@ export default function ManuscriptPage() {
             <div style={{
               borderTop: "1px solid var(--border)", backgroundColor: "var(--bg-card)",
               padding: "12px clamp(12px, 2vw, 20px)",
-              display: "flex", gap: "10px", flexWrap: "wrap",
+              display: "flex", flexDirection: "column", gap: "10px",
               position: "sticky", bottom: 0,
             }}>
+              {/* View + grouping toggles */}
+              <div style={{ display: "flex", gap: "16px", alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 500 }}>View:</span>
+                  <button onClick={() => setViewMode("edited")} style={{
+                    fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                    border: `1px solid ${viewMode === "edited" ? "var(--accent)" : "var(--border)"}`,
+                    backgroundColor: viewMode === "edited" ? "var(--accent-light)" : "transparent",
+                    color: viewMode === "edited" ? "var(--accent)" : "var(--text-secondary)",
+                    cursor: "pointer",
+                  }}>Edited view</button>
+                  <button onClick={() => setViewMode("compare")} style={{
+                    fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                    border: `1px solid ${viewMode === "compare" ? "var(--accent)" : "var(--border)"}`,
+                    backgroundColor: viewMode === "compare" ? "var(--accent-light)" : "transparent",
+                    color: viewMode === "compare" ? "var(--accent)" : "var(--text-secondary)",
+                    cursor: "pointer",
+                  }}>Compare view</button>
+                </div>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 500 }}>Group:</span>
+                  <button onClick={() => setGroupMode("paragraph")} style={{
+                    fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                    border: `1px solid ${groupMode === "paragraph" ? "var(--accent)" : "var(--border)"}`,
+                    backgroundColor: groupMode === "paragraph" ? "var(--accent-light)" : "transparent",
+                    color: groupMode === "paragraph" ? "var(--accent)" : "var(--text-secondary)",
+                    cursor: "pointer",
+                  }}>Paragraph</button>
+                  <button onClick={() => setGroupMode("sentence")} style={{
+                    fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                    border: `1px solid ${groupMode === "sentence" ? "var(--accent)" : "var(--border)"}`,
+                    backgroundColor: groupMode === "sentence" ? "var(--accent-light)" : "transparent",
+                    color: groupMode === "sentence" ? "var(--accent)" : "var(--text-secondary)",
+                    cursor: "pointer",
+                  }}>Sentence</button>
+                </div>
+              </div>
+
+              {/* Download buttons */}
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button onClick={() => handleDownload("edited")} style={{
                 fontSize: "clamp(12px, 1.5vw, 13px)", fontWeight: 500,
                 padding: "9px clamp(12px, 2vw, 18px)", borderRadius: "8px",
@@ -851,6 +1323,7 @@ export default function ManuscriptPage() {
                 cursor: "pointer", display: "flex", alignItems: "center", gap: "6px",
                 flex: "1 1 auto",
               }}>📥 Download edit-PC version</button>
+              </div>
             </div>
           )}
         </div>

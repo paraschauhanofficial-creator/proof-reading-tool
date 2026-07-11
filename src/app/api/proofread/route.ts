@@ -37,7 +37,6 @@ function separateReferences(text: string): { mainText: string; references: strin
   return { mainText: text, references: "" };
 }
 
-// Split into words and chunk at a max size
 function wordChunk(text: string, size: number): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
@@ -47,19 +46,16 @@ function wordChunk(text: string, size: number): string[] {
   return chunks.length ? chunks : [text];
 }
 
-// Build condensed view: each paragraph's first ~2 lines (for structure detection)
 function condenseForStructure(mainText: string): string {
   const paras = mainText.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
   return paras
     .map(p => {
       const words = p.split(/\s+/);
-      // first ~25 words of each paragraph
       return words.slice(0, 25).join(" ");
     })
     .join("\n");
 }
 
-// Extract title / running title / abstract / keywords / body from raw text
 function extractFrontMatter(mainText: string) {
   const lines = mainText.split("\n").map(l => l.trim()).filter(Boolean);
   let title = lines[0] || "";
@@ -74,7 +70,6 @@ function extractFrontMatter(mainText: string) {
     }
   }
 
-  // Abstract
   let abstract = "";
   let keywords = "";
   const abstractIdx = lines.findIndex((l, i) => i >= bodyStartIdx && /^\[?abstract\]?[:\s]?/i.test(l));
@@ -82,7 +77,6 @@ function extractFrontMatter(mainText: string) {
 
   if (abstractIdx !== -1) {
     const abstractLines: string[] = [];
-    // Handle inline "Abstract: ..." on the same line
     const firstLine = lines[abstractIdx].replace(/^\[?abstract\]?[:\s]*/i, "").trim();
     if (firstLine) abstractLines.push(firstLine);
     let i = abstractIdx + 1;
@@ -95,7 +89,6 @@ function extractFrontMatter(mainText: string) {
     afterAbstractIdx = i;
   }
 
-  // Keywords
   const kwIdx = lines.findIndex((l, i) => i >= afterAbstractIdx && /^\[?keywords?\]?[:\s]/i.test(l));
   let bodyFromIdx = afterAbstractIdx;
   if (kwIdx !== -1) {
@@ -105,6 +98,89 @@ function extractFrontMatter(mainText: string) {
 
   const body = lines.slice(bodyFromIdx).join("\n");
   return { title, runningTitle, abstract, keywords, body };
+}
+
+// ---------- abstract label helpers ----------
+
+// Detect & separate abstract into labeled sections (when labels ARE present with colons)
+function separateAbstractLabels(abstractText: string): { label: string; text: string }[] | null {
+  const clean = abstractText.replace(/^\[?abstract\]?[:\s]*/i, "").trim();
+  const labels = ["Background", "Objective", "Objectives", "Aim", "Aims", "Purpose", "Methods", "Method", "Materials and Methods", "Results", "Conclusion", "Conclusions"];
+  const labelPattern = new RegExp(`(?:^|[.\\s])(${labels.join("|")})\\s*[:：]`, "gi");
+  const matches = [...clean.matchAll(labelPattern)];
+  if (matches.length < 2) return null;
+  const sections: { label: string; text: string }[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const label = matches[i][1];
+    const matchStart = matches[i].index!;
+    const labelEnd = matchStart + matches[i][0].length;
+    const end = i < matches.length - 1 ? matches[i + 1].index! : clean.length;
+    const text = clean.slice(labelEnd, end).trim();
+    sections.push({
+      label: label.charAt(0).toUpperCase() + label.slice(1).toLowerCase(),
+      text,
+    });
+  }
+  return sections;
+}
+
+// Detect labels present in the original abstract, in order
+function detectAbstractLabelsInOrder(abstractText: string): string[] {
+  const clean = abstractText.replace(/^\[?abstract\]?[:\s]*/i, "").trim();
+  const labels = ["Background", "Objective", "Objectives", "Aim", "Aims", "Purpose", "Methods", "Method", "Materials and Methods", "Results", "Conclusion", "Conclusions"];
+  const labelPattern = new RegExp(`(?:^|[.\\s])(${labels.join("|")})\\s*[:：]`, "gi");
+  const matches = [...clean.matchAll(labelPattern)];
+  return matches.map(m => m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase());
+}
+
+// Re-attach labels to edited text by splitting into N parts by sentence boundaries
+function reattachLabels(editedText: string, labels: string[]): { label: string; text: string }[] {
+  const sentences = editedText.match(/[^.!?]+[.!?]+/g) || [editedText];
+  const n = labels.length;
+  const perLabel = Math.ceil(sentences.length / n);
+  const sections: { label: string; text: string }[] = [];
+  for (let i = 0; i < n; i++) {
+    const start = i * perLabel;
+    const end = i === n - 1 ? sentences.length : (i + 1) * perLabel;
+    const text = sentences.slice(start, end).join(" ").trim();
+    if (text) sections.push({ label: labels[i], text });
+  }
+  return sections.length >= 2 ? sections : [];
+}
+
+// Slice body into sections using AI-detected anchors
+function sliceBodyIntoSections(body: string, sections: any[]): { name: string; type: string; text: string }[] {
+  if (!sections.length) {
+    return [{ name: "Body", type: "other", text: body }];
+  }
+  const bodyNorm = body.toLowerCase();
+  const positioned = sections.map((sec) => {
+    const anchor = (sec.startText || "").toLowerCase().trim().replace(/\s+/g, " ");
+    let idx = -1;
+    if (anchor.length > 10) {
+      idx = bodyNorm.indexOf(anchor.substring(0, 40));
+    }
+    return { ...sec, idx };
+  }).filter(s => s.idx !== -1).sort((a, b) => a.idx - b.idx);
+
+  if (!positioned.length) {
+    return [{ name: "Body", type: "other", text: body }];
+  }
+
+  const result: { name: string; type: string; text: string }[] = [];
+  for (let i = 0; i < positioned.length; i++) {
+    const start = positioned[i].idx;
+    const end = i < positioned.length - 1 ? positioned[i + 1].idx : body.length;
+    result.push({
+      name: positioned[i].name || `Section ${i + 1}`,
+      type: positioned[i].type || "other",
+      text: body.slice(start, end).trim(),
+    });
+  }
+  if (positioned[0].idx > 30) {
+    result.unshift({ name: "Introduction", type: "introduction", text: body.slice(0, positioned[0].idx).trim() });
+  }
+  return result;
 }
 
 // ---------- AI calls ----------
@@ -163,9 +239,9 @@ TITLE RULES:
 - Identify the CORE contrast/intervention/finding and build the title around it (e.g., "Effects of Underbody Versus Upper-Body Forced-Air Warming on...")
 - State intervention/comparison + outcome + population + study design
 - Replace vague words ("different sites", "the value of") with the specific comparison
-- "The Value of X in Y" → "Association of X with Y"; "reveals" → "identifies"
+- "The Value of X in Y" -> "Association of X with Y"; "reveals" -> "identifies"
 - Add population explicitly; add design where evident (": A Randomized Controlled Trial")
-- Person-first: "Lung Cancer Patients" → "Patients with Lung Cancer"; Title case
+- Person-first: "Lung Cancer Patients" -> "Patients with Lung Cancer"; Title case
 - The edited title MUST differ substantially from the original
 
 RUNNING TITLE RULES:
@@ -216,68 +292,6 @@ KEYWORDS: ${keywordsText}`;
     console.error("Keywords edit error:", e);
     return null;
   }
-}
-
-// Detect & separate abstract into labeled sections
-function separateAbstractLabels(abstractText: string): { label: string; text: string }[] | null {
-  const clean = abstractText.replace(/^\[?abstract\]?[:\s]*/i, "").trim();
-  const labels = ["Background", "Objective", "Objectives", "Aim", "Aims", "Purpose", "Methods", "Method", "Materials and Methods", "Results", "Conclusion", "Conclusions"];
-  // Match label followed by colon (handles both : and ：, with or without preceding period/space)
-  const labelPattern = new RegExp(`(?:^|[.\\s])(${labels.join("|")})\\s*[:：]`, "gi");
-  const matches = [...clean.matchAll(labelPattern)];
-  if (matches.length < 2) return null;
-
-  const sections: { label: string; text: string }[] = [];
-  for (let i = 0; i < matches.length; i++) {
-    const label = matches[i][1];
-    // Start after the full matched label+colon
-    const matchStart = matches[i].index!;
-    const labelEnd = matchStart + matches[i][0].length;
-    const end = i < matches.length - 1 ? matches[i + 1].index! : clean.length;
-    const text = clean.slice(labelEnd, end).trim();
-    sections.push({
-      label: label.charAt(0).toUpperCase() + label.slice(1).toLowerCase(),
-      text,
-    });
-  }
-  return sections;
-}
-
-// Slice body into sections using AI-detected anchors
-function sliceBodyIntoSections(body: string, sections: any[]): { name: string; type: string; text: string }[] {
-  if (!sections.length) {
-    return [{ name: "Body", type: "other", text: body }];
-  }
-  const bodyNorm = body.toLowerCase();
-  // Find each section's start index by its anchor
-  const positioned = sections.map((sec) => {
-    const anchor = (sec.startText || "").toLowerCase().trim().replace(/\s+/g, " ");
-    let idx = -1;
-    if (anchor.length > 10) {
-      idx = bodyNorm.indexOf(anchor.substring(0, 40));
-    }
-    return { ...sec, idx };
-  }).filter(s => s.idx !== -1).sort((a, b) => a.idx - b.idx);
-
-  if (!positioned.length) {
-    return [{ name: "Body", type: "other", text: body }];
-  }
-
-  const result: { name: string; type: string; text: string }[] = [];
-  for (let i = 0; i < positioned.length; i++) {
-    const start = positioned[i].idx;
-    const end = i < positioned.length - 1 ? positioned[i + 1].idx : body.length;
-    result.push({
-      name: positioned[i].name || `Section ${i + 1}`,
-      type: positioned[i].type || "other",
-      text: body.slice(start, end).trim(),
-    });
-  }
-  // Prepend any text before the first anchor (unlabeled intro)
-  if (positioned[0].idx > 30) {
-    result.unshift({ name: "Introduction", type: "introduction", text: body.slice(0, positioned[0].idx).trim() });
-  }
-  return result;
 }
 
 // ---------- main handler ----------
@@ -337,26 +351,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 3. Abstract (edit as one section, then separate labels)
+    // 3. Abstract (edit, then re-attach labels from original if AI dropped them)
     if (front.abstract) {
       const abs = await editSection(front.abstract, "Abstract", "abstract");
       mergeSummary(abs.summary);
 
-      // Combine all edited sentences, dedupe consecutive repeats
       const editedParts = abs.sentences
         .map((s: any) => (s.edited || s.original || "").replace(/\*\*/g, "").trim())
         .filter(Boolean);
-      // Remove duplicate consecutive sentences (AI sometimes repeats)
       const deduped: string[] = [];
       for (const part of editedParts) {
-        if (deduped.length === 0 || deduped[deduped.length - 1] !== part) {
-          // also skip if this part already appears earlier
-          if (!deduped.includes(part)) deduped.push(part);
-        }
+        if (!deduped.includes(part)) deduped.push(part);
       }
       const combinedEdited = deduped.join(" ");
 
-      const labeledSections = separateAbstractLabels(combinedEdited);
+      const origLabels = detectAbstractLabelsInOrder(front.abstract);
+      let labeledSections: { label: string; text: string }[] | null = separateAbstractLabels(combinedEdited);
+
+      if ((!labeledSections || labeledSections.length < 2) && origLabels.length >= 2) {
+        labeledSections = reattachLabels(combinedEdited, origLabels);
+      }
+
       if (labeledSections && labeledSections.length >= 2) {
         labeledSections.forEach((sec, idx) => {
           allSentences.push({
@@ -371,6 +386,19 @@ export async function POST(request: NextRequest) {
           edited: combinedEdited || front.abstract,
           changed: combinedEdited !== front.abstract,
           section: "abstract",
+        });
+      }
+    }
+
+    // 4. Keywords
+    if (front.keywords) {
+      const kw = await editKeywords(front.keywords);
+      if (kw) {
+        allSentences.push({
+          original: kw.original || front.keywords,
+          edited: kw.edited || front.keywords,
+          changed: kw.changed ?? true,
+          section: "keywords",
         });
       }
     }
