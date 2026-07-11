@@ -81,7 +81,6 @@ function stripBoldFromRPr(rPr: string): string {
     .replace(/<w:bCs\s*\/>/g, "");
 }
 
-// Build run props WITH bold added
 function addBoldToRPr(rPr: string): string {
   const stripped = stripBoldFromRPr(rPr);
   if (stripped.includes("<w:rPr>")) {
@@ -109,7 +108,6 @@ function makeDelRun(text: string, rPr: string, author: string): string {
   return `<w:del w:id="${nextId()}" w:author="${author}" w:date="${CHANGE_DATE}"><w:r>${rPr}<w:delText xml:space="preserve">${escapeXml(text)}</w:delText></w:r></w:del>`;
 }
 
-// Convert **bold** markdown segments in text into a mix of bold/non-bold INSERTED runs
 function makeInsRunsWithBold(text: string, rPr: string, author: string): string {
   if (!text) return "";
   const boldRPr = addBoldToRPr(rPr);
@@ -118,8 +116,7 @@ function makeInsRunsWithBold(text: string, rPr: string, author: string): string 
   for (const part of parts) {
     if (!part) continue;
     if (/^\*\*[^*]+\*\*$/.test(part)) {
-      const inner = part.replace(/\*\*/g, "");
-      runs += makeInsRun(inner, boldRPr, author);
+      runs += makeInsRun(part.replace(/\*\*/g, ""), boldRPr, author);
     } else {
       runs += makeInsRun(part, rPr, author);
     }
@@ -127,25 +124,6 @@ function makeInsRunsWithBold(text: string, rPr: string, author: string): string 
   return runs;
 }
 
-// Same for normal (clean) runs
-function makeRunsWithBold(text: string, rPr: string): string {
-  if (!text) return "";
-  const boldRPr = addBoldToRPr(rPr);
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  let runs = "";
-  for (const part of parts) {
-    if (!part) continue;
-    if (/^\*\*[^*]+\*\*$/.test(part)) {
-      const inner = part.replace(/\*\*/g, "");
-      runs += makeRun(inner, boldRPr);
-    } else {
-      runs += makeRun(part, rPr);
-    }
-  }
-  return runs;
-}
-
-// BLOCK-LEVEL: strike whole original, insert whole edited (matches paste workflow)
 function generateBlockTracked(
   original: string,
   edited: string,
@@ -159,7 +137,6 @@ function generateBlockTracked(
   return makeDelRun(original, rPr, author) + insRuns;
 }
 
-// WORD-LEVEL: granular diff (matches Word Compare)
 function generateWordTracked(
   original: string,
   edited: string,
@@ -170,7 +147,6 @@ function generateWordTracked(
   const cleanEdited = edited.replace(/\*\*/g, "");
   const diffs = dmp.diff_main(original, cleanEdited);
   dmp.diff_cleanupSemantic(diffs);
-
   let runs = "";
   for (const [op, data] of diffs) {
     if (!data) continue;
@@ -248,19 +224,22 @@ function buildParagraphEdits(
     map.set(para, { original: paraText, edited: editedText, section: "body" });
   });
 
-  // Title
+  // Title — match the FIRST paragraph that contains the title text
+  // (title paragraphs often have NO heading style, so do not require it)
   const titleSents = bySection["title"] || [];
   if (titleSents.length > 0 && titleSents[0].changed) {
     const tOrig = stripLabel(titleSents[0].original || "");
     const tEdit = stripLabel(titleSents[0].edited || "");
-    paragraphs.forEach((para) => {
+    const tKey = normalizeText(tOrig).substring(0, 40);
+    for (const para of paragraphs) {
       const paraText = extractTextFromXml(para).trim();
-      if (!paraText) return;
-      const key = normalizeText(tOrig).substring(0, 45);
-      if (key && normalizeText(paraText).includes(key) && isHeadingParagraph(para)) {
+      if (!paraText) continue;
+      const paraNorm = normalizeText(paraText);
+      if (tKey && (paraNorm.includes(tKey) || tKey.includes(paraNorm.substring(0, 40)))) {
         map.set(para, { original: paraText, edited: tEdit, section: "title" });
+        break; // only the first match (the real title)
       }
-    });
+    }
   }
 
   // Running title
@@ -292,7 +271,7 @@ function buildParagraphEdits(
     });
   }
 
-  // Abstract — supports labeled sections (Objective/Methods/Results/Conclusion)
+  // Abstract — supports labeled sections
   const abstractSents = bySection["abstract"] || [];
   if (abstractSents.length > 0) {
     const originalEntry = abstractSents.find((s: any) => (s.original || "").trim().length > 40);
@@ -303,7 +282,6 @@ function buildParagraphEdits(
     const isLabeled = abstractSents.some((s: any) => s.isLabeledPart);
     let editedCombined: string;
     if (isLabeled) {
-      // Each labeled section on its own line, keeping **bold** markers
       editedCombined = abstractSents
         .map((s: any) => (s.edited || "").trim())
         .filter(Boolean)
@@ -357,7 +335,6 @@ async function generateDocxBuffer(
 
     const pPr = getParagraphProps(para);
     const openTag = para.match(/^<w:p\b[^>]*>/)?.[0] || "<w:p>";
-
     const hasBoldMarkers = edited.includes("**");
 
     let innerRuns: string;

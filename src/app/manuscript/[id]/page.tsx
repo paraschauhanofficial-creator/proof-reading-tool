@@ -143,6 +143,8 @@ export default function ManuscriptPage() {
   const [rawSections, setRawSections] = useState<any>(null);
   const [visibleSentences, setVisibleSentences] = useState<number>(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<string>("");
 
   const router = useRouter();
   const params = useParams();
@@ -322,6 +324,41 @@ export default function ManuscriptPage() {
     }
   };
 
+  // ---- Inline QA editing: update a sentence's edited text ----
+  const saveEdit = (section: string, index: number, newText: string) => {
+    setResult((prev: any) => {
+      if (!prev?.sentences) return prev;
+      const updated = { ...prev, sentences: prev.sentences.map((s: any) => ({ ...s })) };
+      // Find the Nth sentence of this section
+      let counter = -1;
+      for (let i = 0; i < updated.sentences.length; i++) {
+        const s = updated.sentences[i];
+        const sSection = s.section || "body";
+        if (sSection === section) {
+          counter++;
+          if (counter === index) {
+            updated.sentences[i].edited = newText;
+            updated.sentences[i].changed =
+              (updated.sentences[i].original || "").trim() !== newText.trim();
+            updated.sentences[i].qaEdited = true;
+            break;
+          }
+        }
+      }
+      try {
+        sessionStorage.setItem(`result_${params.id}`, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    setEditingKey(null);
+    setEditDraft("");
+  };
+
+  const beginEdit = (key: string, currentText: string) => {
+    setEditingKey(key);
+    setEditDraft(currentText);
+  };
+
   const stageIndex = manuscript ? getStageIndex(manuscript.status) : 0;
 
   const sidebarStageColor = (i: number) => {
@@ -403,6 +440,65 @@ export default function ManuscriptPage() {
     backgroundColor: "var(--bg-card)",
     borderLeft: "2px solid var(--border)",
     color: "var(--text-secondary)", marginBottom: "3px", wordBreak: "break-word",
+  };
+
+  // Editable green box — click to edit the AI's edited text for QA
+  const renderEditableGreen = (
+    section: string,
+    index: number,
+    text: string,
+    extraStyle: React.CSSProperties = {}
+  ) => {
+    const key = `${section}-${index}`;
+    const isEditing = editingKey === key;
+    if (isEditing) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "3px" }}>
+          <textarea
+            value={editDraft}
+            onChange={(e) => setEditDraft(e.target.value)}
+            autoFocus
+            style={{
+              width: "100%", minHeight: "80px", fontSize: "clamp(12px, 1.5vw, 13px)",
+              lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px",
+              backgroundColor: "rgba(34,197,94,0.06)", border: "1px solid #22c55e",
+              color: "var(--text-primary)", outline: "none", resize: "vertical",
+              fontFamily: "inherit", boxSizing: "border-box",
+            }}
+          />
+          <div style={{ display: "flex", gap: "6px" }}>
+            <button
+              onClick={() => saveEdit(section, index, editDraft)}
+              style={{
+                fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                border: "none", backgroundColor: "#22c55e", color: "#fff", cursor: "pointer",
+              }}
+            >Save</button>
+            <button
+              onClick={() => { setEditingKey(null); setEditDraft(""); }}
+              style={{
+                fontSize: "12px", fontWeight: 500, padding: "5px 14px", borderRadius: "6px",
+                border: "1px solid var(--border)", backgroundColor: "var(--bg)",
+                color: "var(--text-secondary)", cursor: "pointer",
+              }}
+            >Cancel</button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div
+        onClick={() => beginEdit(key, text)}
+        title="Click to edit"
+        style={{ ...EDITED, ...extraStyle, cursor: "text", position: "relative" }}
+      >
+        {text}
+        <span style={{
+          marginLeft: "8px", fontSize: "10px", color: "var(--text-muted)",
+          opacity: 0.6,
+        }}>✎</span>
+      </div>
+    );
   };
 
   if (loading) return (
@@ -635,10 +731,19 @@ export default function ManuscriptPage() {
             {manuscript?.status === "completed" && result && (
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
 
+                {/* QA hint */}
+                <div style={{
+                  padding: "10px 14px", borderRadius: "8px", marginBottom: "8px",
+                  backgroundColor: "var(--accent-light)", border: "1px solid var(--accent-border)",
+                  fontSize: "12px", color: "var(--accent)", fontWeight: 500,
+                }}>
+                  ✎ Click any green (edited) text to adjust it before exporting. Your changes are saved automatically.
+                </div>
+
                 {/* TITLE */}
                 <p style={SECTION_LABEL}>Title</p>
                 {titleChanged ? (
-                  <><div style={ORIGINAL}>{titleOriginal}</div><div style={EDITED}>{titleEdited}</div></>
+                  <><div style={ORIGINAL}>{titleOriginal}</div>{renderEditableGreen("title", 0, titleEdited)}</>
                 ) : (
                   <div style={{ ...UNCHANGED, fontWeight: 600 }}>{titleOriginal}</div>
                 )}
@@ -647,7 +752,7 @@ export default function ManuscriptPage() {
                 {runningTitleOriginal && (<>
                   <p style={SECTION_LABEL}>Running title</p>
                   {runningTitleChanged ? (
-                    <><div style={ORIGINAL}>{runningTitleOriginal}</div><div style={EDITED}>{runningTitleEdited}</div></>
+                    <><div style={ORIGINAL}>{runningTitleOriginal}</div>{renderEditableGreen("running_title", 0, runningTitleEdited)}</>
                   ) : (
                     <div style={UNCHANGED}>{runningTitleOriginal}</div>
                   )}
@@ -657,7 +762,7 @@ export default function ManuscriptPage() {
                 {abstractOriginal && (<>
                   <p style={SECTION_LABEL}>Abstract</p>
                   {abstractChanged ? (
-                    <><div style={ORIGINAL}>{abstractOriginal}</div><div style={EDITED}>{abstractEdited}</div></>
+                    <><div style={ORIGINAL}>{abstractOriginal}</div>{renderEditableGreen("abstract", 0, abstractEdited)}</>
                   ) : (
                     <div style={UNCHANGED}>{abstractOriginal}</div>
                   )}
@@ -667,7 +772,7 @@ export default function ManuscriptPage() {
                 {keywordsOriginal && (<>
                   <p style={SECTION_LABEL}>Keywords</p>
                   {keywordsChanged ? (
-                    <><div style={ORIGINAL}>{keywordsOriginal}</div><div style={EDITED}>{keywordsEdited}</div></>
+                    <><div style={ORIGINAL}>{keywordsOriginal}</div>{renderEditableGreen("keywords", 0, keywordsEdited)}</>
                   ) : (
                     <div style={UNCHANGED}>{keywordsEdited}</div>
                   )}
@@ -681,7 +786,7 @@ export default function ManuscriptPage() {
                       s.changed ? (
                         <div key={i}>
                           <div style={ORIGINAL}>{s.original}</div>
-                          <div style={EDITED}>{s.edited}</div>
+                          {renderEditableGreen("body", i, s.edited)}
                         </div>
                       ) : (
                         <div key={i} style={UNCHANGED}>{s.original}</div>
