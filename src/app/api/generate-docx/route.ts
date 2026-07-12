@@ -207,7 +207,8 @@ function makeStyledRuns(text: string, baseRPr: string): string {
   return runs || makeRun(text.replace(/\*/g, ""), baseRPr);
 }
 
-// BLOCK-LEVEL tracked: strike whole original, insert whole edited (styled)
+// BLOCK-LEVEL tracked: insert whole edited (styled) FIRST, then strike whole original.
+// Order matches manual paste-over-selection (new text first, deleted original after, no gap).
 function generateBlockTracked(
   original: string,
   edited: string,
@@ -218,7 +219,7 @@ function generateBlockTracked(
   const insRuns = hasMarkers
     ? makeStyledInsRuns(edited, rPr, author)
     : makeInsRun(edited, rPr, author);
-  return makeDelRun(original, rPr, author) + insRuns;
+  return insRuns + makeDelRun(original, rPr, author);
 }
 
 // WORD-LEVEL tracked: granular diff (edit-PC style)
@@ -254,6 +255,18 @@ function deriveOutputFilename(originalFileUrl: string, type: "edited" | "editpc"
   }
 }
 
+// Distinctive signature for a sentence's original text.
+// Uses the FULL normalized string (not a short prefix) so that two sentences which
+// merely share an opening phrase — e.g. section 1.1 and 2.1 both starting
+// "A total of 276 patients who underwent laparoscopic CRC surgery..." — do NOT collide.
+function sentenceKey(normOrig: string): string {
+  // Full string is most distinctive. Cap very long strings to keep indexOf cheap,
+  // but keep enough tail that near-duplicate openings still diverge.
+  if (normOrig.length <= 200) return normOrig;
+  // For very long sentences, combine head + tail so the ending (which differs) is included.
+  return normOrig.substring(0, 140) + "|" + normOrig.substring(normOrig.length - 60);
+}
+
 function buildParagraphEdits(
   paragraphs: string[],
   sentences: any[]
@@ -267,38 +280,57 @@ function buildParagraphEdits(
     bySection[sec].push(s);
   });
 
-  // Body — match each paragraph to the sentences it contains
+  // ---- BODY matching (position-anchored, collision-safe) ----
+  // Give each body sentence a stable index so it can be consumed exactly ONCE across
+  // all paragraphs. This is the core fix: previously a sentence could match multiple
+  // paragraphs (or the wrong paragraph) when two sentences shared a 50-char opening,
+  // which duplicated content and dropped data (e.g. "179 males" vanished from 2.1).
+  const bodyIndexed = sentences
+    .map((s: any, idx: number) => ({ s, idx }))
+    .filter(({ s }: any) => (s.section || "body") === "body");
+
+  const usedSentenceIdx = new Set<number>();
+
+  // Process paragraphs in document order so the earliest paragraph claims a shared
+  // sentence first, and later near-duplicate paragraphs match only their own sentence.
   paragraphs.forEach((para) => {
     const paraText = extractTextFromXml(para).trim();
     if (!paraText || paraText.length < 5) return;
     const paraNorm = normalizeText(paraText);
 
-    const matched: any[] = [];
-    const seen = new Set<string>();
-    sentences.forEach((s: any) => {
-      if ((s.section || "body") !== "body") return;
+    // Collect every not-yet-used body sentence whose distinctive signature appears
+    // in THIS paragraph, recording character position for ordering.
+    const hits: { s: any; idx: number; pos: number }[] = [];
+    for (const { s, idx } of bodyIndexed) {
+      if (usedSentenceIdx.has(idx)) continue;
       const orig = (s.original || "").trim();
-      if (!orig || orig.length < 12) return;
-      const key = normalizeText(orig).substring(0, 50);
-      if (paraNorm.includes(key) && !seen.has(key)) {
-        seen.add(key);
-        matched.push(s);
+      if (!orig || orig.length < 12) continue;
+      const normOrig = normalizeText(orig);
+
+      // Try full/near-full match first (most reliable, disambiguates duplicates).
+      let pos = paraNorm.indexOf(sentenceKey(normOrig));
+      // Fallback: if the AI's stored original differs slightly from the DOCX text
+      // (punctuation/whitespace), try a shorter but still distinctive slice.
+      if (pos === -1 && normOrig.length >= 60) {
+        pos = paraNorm.indexOf(normOrig.substring(0, 60));
       }
-    });
+      if (pos !== -1) {
+        hits.push({ s, idx, pos });
+      }
+    }
 
-    if (matched.length === 0) return;
+    if (hits.length === 0) return;
 
-    matched.sort((a, b) => {
-      const aPos = paraNorm.indexOf(normalizeText(a.original).substring(0, 30));
-      const bPos = paraNorm.indexOf(normalizeText(b.original).substring(0, 30));
-      return aPos - bPos;
-    });
+    // Order matched sentences by their position within the paragraph, then consume.
+    hits.sort((a, b) => a.pos - b.pos);
+    hits.forEach(h => usedSentenceIdx.add(h.idx));
 
-    const editedText = matched
-      .map((s: any) => (s.edited || s.original || "").trim())
+    const editedText = hits
+      .map(h => (h.s.edited || h.s.original || "").trim())
       .filter(Boolean)
       .join(" ");
 
+    if (!editedText) return;
     map.set(para, { original: paraText, edited: editedText, section: "body" });
   });
 

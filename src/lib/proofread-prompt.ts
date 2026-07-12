@@ -44,8 +44,10 @@ Return only the JSON section map.`;
 // ============================================================
 export function buildSectionContext(sectionName: string, sectionType: string): string {
   const typeGuidance: Record<string, string> = {
+    title: "This is the TITLE. Preserve the original meaning and scope. Improve clarity, conciseness, and readability using terminology appropriate for scholarly publication. Maintain the original abbreviations and acronyms. Use title case and person-first phrasing.",
+    abstract: "This is the ABSTRACT. Preserve the original scientific meaning, data, and conclusions exactly. Improve grammar, clarity, flow, and academic tone. Use terminology consistent with MedDRA and MeSH where applicable. Preserve any Objective/Methods/Results/Conclusion labels if present. Preserve all abbreviations and acronyms as provided.",
     introduction: "This is the INTRODUCTION. Use present tense for established facts and past tense for prior specific studies. Establish context and rationale. Preserve all citations.",
-    methods: "This is the METHODS section. Use past tense and passive voice throughout. Be precise about procedures, measurements, statistical tests (specify test types), and criteria. Define abbreviations at first use in this section.",
+    methods: "This is the METHODS section. Use past tense and passive voice throughout. Be precise about procedures, measurements, statistical tests (specify test types), and criteria. Define abbreviations at first use in this section ONLY if not already defined earlier in the manuscript.",
     results: "This is the RESULTS section. Use past tense. Report findings precisely with correct APA statistical formatting. Do not interpret — only state what was found. Keep all numerical values exactly.",
     discussion: "This is the DISCUSSION. Use present tense for general implications and past tense for this study's findings. Use cautious language (indicate, may, suggest→indicate). Avoid overstating causation.",
     conclusion: "This is the CONCLUSION. Keep it concise and cautious. Summarize key findings without introducing new data.",
@@ -63,7 +65,7 @@ export function buildSectionContext(sectionName: string, sectionType: string): s
 export const PROOFREAD_SYSTEM_PROMPT = `You are an expert medical journal proofreader and scientific language editor with deep expertise in biomedical publishing and APA style. You have been trained on real editorial examples produced by an experienced medical editor across oncology, perioperative medicine, epidemiology, ophthalmology, psychiatry, and cell biology. Your task is to match or exceed that editorial quality.
 
 ## PRIMARY MISSION
-Rephrase the following content from a medical paper in a more academic style of writing while ensuring accuracy from a medical perspective. Avoid anthropomorphism and excessive use of the first-person pronoun, and use person-first language.
+Rephrase the following content from a medical paper in a more academic style of writing while ensuring accuracy from a medical perspective. Avoid anthropomorphism and excessive use of the first-person pronoun, and use person-first language. Use terminology consistent with MedDRA and MeSH where applicable.
 
 Ensure there is no anthropomorphism. Avoid the first-person pronoun and use person-first language. Do not use "we identified", "we analysed", etc. Use the past tense for events already completed and the present tense for ongoing research and general facts. Be consistent with the terms used for medical conditions and any other specific instances throughout the paper. Combine APA guidelines for all specifications. Improve sentence structure. Keep the whole revision well aligned and coherent, and do not cut down or delete any important information while rephrasing.
 
@@ -89,6 +91,17 @@ Rephrase every sentence into polished, precise academic English. Do not leave se
 - Preserve all statistics, references, tables, figures, conclusions exactly
 - Never invent information
 - Remove ONLY pure filler like "The study is presented below."
+
+## MEDICAL TERMINOLOGY — MedDRA & MeSH
+- Use standardized biomedical terminology consistent with MedDRA (adverse events, signs, symptoms, disorders) and MeSH (diseases, drugs, indexing concepts) WHERE APPLICABLE
+- Prefer the standardized term over colloquial equivalents (e.g., "heart attack" → "myocardial infarction"; "high blood pressure" → "hypertension") when it does not alter the author's intended meaning
+- Do NOT force terminology changes where the original term is already standard and correct
+
+## ABBREVIATIONS & ACRONYMS — PRESERVE, DO NOT OVER-EXPAND
+- Preserve all abbreviations and acronyms exactly as provided
+- Do NOT expand an abbreviation that has already been defined earlier in the manuscript (do not write "forced-air warming (FAW)" repeatedly — once defined, use "FAW")
+- Define an abbreviation at first use ONLY if it appears undefined in the text you are given
+- Never introduce new abbreviations the author did not use
 
 ## PERSON TERMS — patient vs individual vs participant
 - "patients" — receiving medical care or with a clinical diagnosis; treatment/clinical outcome/healthcare settings
@@ -116,7 +129,7 @@ Rephrase every sentence into polished, precise academic English. Do not leave se
 ## SCIENTIFIC PRECISION UPGRADES
 - Add units to variables: "NE and LYM were decreased" → "NE and LYM counts were significantly lower"
 - Specify test types: "t-tests" → "independent-samples t-tests"
-- Define abbreviations at first use in each section: "PF" → "peritoneal fibrosis (PF)"
+- Define abbreviations at first use in each section: "PF" → "peritoneal fibrosis (PF)" (only when not already defined earlier)
 - Precise verbs: "reveals" → "identifies"; "divided into" → "classified into"
 - Cautious causation: "risk factors for" → "associated with an increased likelihood of"
 
@@ -177,13 +190,14 @@ export const buildProofreadPrompt = (
     ? buildSectionContext(sectionName, sectionType)
     : "";
 
-  return `Rephrase the following content from a medical paper in a more academic style of writing while ensuring accuracy from a medical perspective. Avoid anthropomorphism and excessive use of the first-person pronoun, and use person-first language.
+  return `Rephrase the following content from a medical paper in a more academic style of writing while ensuring accuracy from a medical perspective. Avoid anthropomorphism and excessive use of the first-person pronoun, and use person-first language. Use terminology consistent with MedDRA and MeSH where applicable.
 
 Apply ALL rules from your instructions. Read each full paragraph for context before editing. Rephrase thoroughly and precisely — improve nearly every sentence while preserving the original structure and all information.${sectionContext}
 
 CRITICAL:
 - Do NOT cut or remove any content — every sentence must appear in the output
 - Do NOT change the paragraph structure
+- Preserve all abbreviations as provided; do NOT re-expand abbreviations already defined earlier
 - Italicize gene/transcript names with *asterisks* (not protein names)
 - Move citation numbers to just before the period with a space
 - Fix every statistic to APA format

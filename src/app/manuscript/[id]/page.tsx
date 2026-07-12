@@ -362,6 +362,7 @@ export default function ManuscriptPage() {
       sessionStorage.setItem(`text_${params.id}`, manuscriptText);
       const sections = parseDocumentSections(manuscriptText);
       setRawSections(sections);
+      setRawBodyText(manuscriptText);
 
       await supabase.from("manuscripts").update({ status: "rechecking" }).eq("id", params.id);
       setManuscript((prev: any) => ({ ...prev, status: "rechecking" }));
