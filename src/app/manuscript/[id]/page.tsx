@@ -284,6 +284,39 @@ export default function ManuscriptPage() {
     }
   }, [params.id]);
 
+  // Rehydrate from Supabase when sessionStorage is empty (e.g. reopened / new tab)
+  useEffect(() => {
+    if (!manuscript || result) return;
+    if (manuscript.status !== "completed" || !manuscript.result_file_url) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.storage
+          .from("manuscripts")
+          .download(manuscript.result_file_url);
+        if (error || !data || cancelled) return;
+
+        const parsed = JSON.parse(await data.text());
+        if (cancelled) return;
+
+        const { rawText, ...aiResult } = parsed;
+        setResult(aiResult);
+        sessionStorage.setItem(`result_${params.id}`, JSON.stringify(aiResult));
+
+        if (rawText) {
+          setRawSections(parseDocumentSections(rawText));
+          setRawBodyText(rawText);
+          sessionStorage.setItem(`text_${params.id}`, rawText);
+        }
+      } catch (e) {
+        console.error("Rehydrate failed:", e);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [manuscript, result, params.id]);
+
   const startTagCycle = () => {
     tagInterval.current = setInterval(() => {
       setTagVisible(false);
@@ -371,15 +404,33 @@ export default function ManuscriptPage() {
       clearInterval(tagInterval.current);
       clearInterval(sentenceInterval.current);
 
+      // Persist full result + raw text to storage so the manuscript can be reopened later
+      let resultPath: string | null = null;
+      try {
+        const resultBlob = JSON.stringify({ ...aiResult, rawText: manuscriptText });
+        resultPath = `${manuscript.user_id}/${params.id}/result.json`;
+        await supabase.storage
+          .from("manuscripts")
+          .upload(resultPath, new Blob([resultBlob], { type: "application/json" }), {
+            upsert: true,
+            contentType: "application/json",
+          });
+      } catch (e) {
+        console.error("Result persist failed:", e);
+        resultPath = null;
+      }
+
       await supabase.from("manuscripts").update({
         status: "completed",
         edit_summary: aiResult.summary,
+        ...(resultPath ? { result_file_url: resultPath } : {}),
       }).eq("id", params.id);
 
       setManuscript((prev: any) => ({
         ...prev,
         status: "completed",
         edit_summary: aiResult.summary,
+        ...(resultPath ? { result_file_url: resultPath } : {}),
       }));
 
     } catch (error: any) {
