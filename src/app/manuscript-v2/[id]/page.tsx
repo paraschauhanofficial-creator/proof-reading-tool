@@ -211,10 +211,21 @@ function groupSentencesByParagraph(sentences: any[], rawBody: string): any[][] {
   sentences.forEach((s: any) => {
     const orig = normalize(s.original || "");
     if (!orig || orig.length < 8) { unassigned.push(s); return; }
-    const key = orig.substring(0, 40);
+    // try progressively shorter keys until we find a match
     let found = -1;
-    for (let p = 0; p < paraNorms.length; p++) {
-      if (paraNorms[p].includes(key)) { found = p; break; }
+    for (const keyLen of [80, 60, 40, 20]) {
+      if (orig.length < keyLen) continue;
+      const key = orig.substring(0, keyLen);
+      for (let p = 0; p < paraNorms.length; p++) {
+        if (paraNorms[p].includes(key)) { found = p; break; }
+      }
+      if (found >= 0) break;
+    }
+    if (found < 0) {
+      // last resort: try any 20-char substring of orig against each para
+      for (let p = 0; p < paraNorms.length && found < 0; p++) {
+        if (orig.length >= 20 && paraNorms[p].includes(orig.substring(0, 20))) found = p;
+      }
     }
     if (found >= 0) groups[found].push(s);
     else unassigned.push(s);
@@ -464,23 +475,14 @@ export default function ManuscriptPage() {
   const v2Norm = (t: string) => (t || "").toLowerCase().replace(/\s+/g, " ").trim();
 
   const v2Persist = async (merged: any) => {
-    // sessionStorage always — instant, never fails
     try { sessionStorage.setItem(`result_${params.id}`, JSON.stringify(merged)); } catch {}
-    // storage save is best-effort — never blocks UI
-    (async () => {
-      try {
-        const resultBlob = JSON.stringify({ ...merged, rawText: rawBodyText });
-        const resultPath = `${manuscript.user_id}/${params.id}/result.json`;
-        const { error: upErr } = await supabase.storage
-          .from("manuscripts")
-          .upload(resultPath, new Blob([resultBlob], { type: "application/json" }), { upsert: true, contentType: "application/json" });
-        if (upErr) { console.warn("Storage save skipped:", upErr.message); return; }
-        await supabase.from("manuscripts")
-          .update({ status: "completed", edit_summary: merged.summary || {}, result_file_url: resultPath })
-          .eq("id", params.id);
-        setManuscript((prev: any) => ({ ...prev, status: "completed", edit_summary: merged.summary || {}, result_file_url: resultPath }));
-      } catch (e) { console.warn("Persist skipped:", e); }
-    })();
+    try {
+      const resultBlob = JSON.stringify({ ...merged, rawText: rawBodyText });
+      const resultPath = `${manuscript.user_id}/${params.id}/result.json`;
+      await supabase.storage.from("manuscripts").upload(resultPath, new Blob([resultBlob], { type: "application/json" }), { upsert: true, contentType: "application/json" });
+      await supabase.from("manuscripts").update({ status: "completed", edit_summary: merged.summary || {}, result_file_url: resultPath }).eq("id", params.id);
+      setManuscript((prev: any) => ({ ...prev, status: "completed", edit_summary: merged.summary || {}, result_file_url: resultPath }));
+    } catch (e) { console.error("Persist failed:", e); }
   };
 
   // V2: send a node (front-matter group or body section/subsection) to AI, merge into result.sentences
@@ -548,11 +550,31 @@ export default function ManuscriptPage() {
     });
   };
 
-  const v2FindEdits = (originalText: string) => {
-    const k = v2Norm(originalText);
+  const v2StripPrefix = (t: string) => (t || "")
+    .replace(/^running\s*title[:\s]*/i, "")
+    .replace(/^\[?abstract\]?[:\s]*/i, "")
+    .replace(/^\[?keywords?\]?[:\s]*/i, "")
+    .trim();
+
+  const v2FindEdits = (originalText: string, section?: string) => {
+    const k = v2Norm(v2StripPrefix(originalText));
+    if (!k || k.length < 5) return [];
     return (result?.sentences || []).filter((s: any) => {
-      const so = v2Norm(s.original);
-      return so === k || (so && so.includes(k)) || (k && k.includes(so));
+      const so = v2Norm(v2StripPrefix(s.original || ""));
+      if (!so || so.length < 3) return false;
+      // section-filtered match for front matter
+      if (section) {
+        if (s.section !== section) return false;
+        if (["title","running_title","abstract","keywords"].includes(section)) {
+          return so === k || so.includes(k.substring(0, Math.min(k.length, 60))) || k.includes(so.substring(0, Math.min(so.length, 60)));
+        }
+      }
+      // for body: the node text is a whole paragraph; sentences are subsets of it
+      // match if the sentence original is contained in the paragraph, OR paragraph contains the sentence
+      if (s.section === "body") {
+        return k.includes(so.substring(0, Math.min(so.length, 80))) || so.includes(k.substring(0, Math.min(k.length, 80)));
+      }
+      return so === k;
     });
   };
   const v2NodeDone = (node: any): boolean => {
@@ -1248,15 +1270,30 @@ export default function ManuscriptPage() {
               const kwDone = kwN ? v2FindEdits(kwN.text).length > 0 : false;
               const frontSending = v2Sending.has("frontgroup");
               const kwSending = kwN ? v2Sending.has(kwN.id) : false;
-              const redGreen = (orig: string) => {
-                const edits = v2FindEdits(orig);
+              const redGreen = (orig: string, section?: string) => {
+                const edits = v2FindEdits(orig, section);
                 if (!edits.length) return null;
-                return edits.map((s: any, i: number) => (
-                  <div key={i} style={{ marginBottom: "3px" }}>
-                    {s.changed && <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(239,68,68,0.07)", borderLeft: "2px solid #ef4444", color: "#f87171", textDecoration: "line-through", marginBottom: "3px", wordBreak: "break-word" }}>{s.original}</div>}
-                    <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(34,197,94,0.07)", borderLeft: "2px solid #22c55e", color: "#4ade80", wordBreak: "break-word" }}>{stripLabel(s.edited)}</div>
+                // For abstract: collect all labeled parts and show original once at top + all edited parts
+                if (section === "abstract") {
+                  const firstOrig = edits.find((s: any) => s.original && s.original.trim().length > 0);
+                  const allEdited = edits.map((s: any) => stripLabel(s.edited || "")).filter(Boolean).join(" ");
+                  return (
+                    <div style={{ marginBottom: "3px" }}>
+                      {firstOrig && <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(239,68,68,0.07)", borderLeft: "2px solid #ef4444", color: "#f87171", textDecoration: "line-through", marginBottom: "3px", wordBreak: "break-word" }}>{firstOrig.original}</div>}
+                      <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(34,197,94,0.07)", borderLeft: "2px solid #22c55e", color: "#4ade80", wordBreak: "break-word" }}>{allEdited}</div>
+                    </div>
+                  );
+                }
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                    {edits.filter((s: any) => s.original || s.edited).map((s: any, i: number) => (
+                      <div key={i} style={{ marginBottom: "3px" }}>
+                        {s.changed && s.original && s.original.trim() && <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(239,68,68,0.07)", borderLeft: "2px solid #ef4444", color: "#f87171", textDecoration: "line-through", marginBottom: "3px", wordBreak: "break-word" }}>{s.original}</div>}
+                        <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(34,197,94,0.07)", borderLeft: "2px solid #22c55e", color: "#4ade80", wordBreak: "break-word" }}>{stripLabel(s.edited || s.original)}</div>
+                      </div>
+                    ))}
                   </div>
-                ));
+                );
               };
               const rawBox = (t: string, bold = false) => <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "var(--bg-card)", borderLeft: "2px solid var(--border)", color: "var(--text-secondary)", marginBottom: "3px", wordBreak: "break-word", fontWeight: bold ? 600 : 400 }}>{t}</div>;
               const renderBodyNode = (node: any, depth: number): any => {
@@ -1265,10 +1302,22 @@ export default function ManuscriptPage() {
                 const isSending = v2Sending.has(node.id);
                 const done = v2NodeDone(node);
                 if (node.kind === "paragraph") {
+                  const nodeEdits = done ? v2FindEdits(node.text) : [];
                   return (
                     <div key={node.id} style={{ marginLeft: indent, marginBottom: "6px", display: "flex", gap: "8px" }}>
                       {!done && <input type="checkbox" checked={isSel} onChange={() => v2Toggle(node)} style={{ marginTop: "9px", flexShrink: 0 }} />}
-                      <div style={{ flex: 1 }}>{isSending ? rawBox("▶ editing…") : (done ? redGreen(node.text) : rawBox(node.text))}</div>
+                      <div style={{ flex: 1 }}>
+                        {isSending ? rawBox("▶ editing…") : done && nodeEdits.length ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                            {nodeEdits.filter((s: any) => s.original || s.edited).map((s: any, si: number) => (
+                              <div key={si}>
+                                {s.changed && s.original && s.original.trim() && <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(239,68,68,0.07)", borderLeft: "2px solid #ef4444", color: "#f87171", textDecoration: "line-through", marginBottom: "3px", wordBreak: "break-word" }}>{s.original}</div>}
+                                <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(34,197,94,0.07)", borderLeft: "2px solid #22c55e", color: "#4ade80", wordBreak: "break-word" }}>{stripLabel(s.edited || s.original)}</div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : rawBox(node.text)}
+                      </div>
                     </div>
                   );
                 }
@@ -1297,9 +1346,9 @@ export default function ManuscriptPage() {
                       <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-primary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Title · Running Title · Abstract{frontDone ? " ✓" : ""}</span>
                       <button onClick={() => v2SendNode(frontGroupNode)} disabled={frontSending} style={{ fontSize: "11px", fontWeight: 500, padding: "3px 12px", borderRadius: "6px", border: "none", backgroundColor: "var(--accent)", color: "#fff", cursor: frontSending ? "wait" : "pointer", opacity: frontSending ? 0.6 : 1 }}>{frontSending ? "Editing…" : frontDone ? "↻ Re-send" : "↳ Send all three"}</button>
                     </div>
-                    {titleN && (v2FindEdits(titleN.text).length ? redGreen(titleN.text) : rawBox(titleN.text, true))}
-                    {rtN && (v2FindEdits(rtN.text).length ? redGreen(rtN.text) : rawBox(rtN.text))}
-                    {absN && (v2FindEdits(absN.text).length ? redGreen(absN.text) : rawBox(absN.text))}
+                    {titleN && (v2FindEdits(titleN.text, "title").length ? redGreen(titleN.text, "title") : rawBox(titleN.text, true))}
+                    {rtN && (v2FindEdits(rtN.text, "running_title").length ? redGreen(rtN.text, "running_title") : rawBox(rtN.text))}
+                    {absN && (v2FindEdits(absN.text, "abstract").length ? redGreen(absN.text, "abstract") : rawBox(absN.text))}
                   </div>
 
                   {/* SECTION 2: keywords */}
@@ -1309,7 +1358,7 @@ export default function ManuscriptPage() {
                         <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-primary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Keywords{kwDone ? " ✓" : ""}</span>
                         <button onClick={() => v2SendNode(kwN)} disabled={kwSending} style={{ fontSize: "11px", fontWeight: 500, padding: "3px 12px", borderRadius: "6px", border: "none", backgroundColor: "var(--accent)", color: "#fff", cursor: kwSending ? "wait" : "pointer", opacity: kwSending ? 0.6 : 1 }}>{kwSending ? "Editing…" : kwDone ? "↻ Re-send" : "↳ Send (alphabetize)"}</button>
                       </div>
-                      {v2FindEdits(kwN.text).length ? redGreen(kwN.text) : rawBox(kwN.text)}
+                      {v2FindEdits(kwN.text, "keywords").length ? redGreen(kwN.text, "keywords") : rawBox(kwN.text)}
                     </div>
                   )}
 
