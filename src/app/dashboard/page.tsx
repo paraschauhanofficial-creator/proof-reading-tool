@@ -98,7 +98,7 @@ export default function DashboardPage() {
     setUploading(false); setPendingFile(null);
     setDeliveryDate(""); setIncomingDate(""); setNotes(""); setWordCount("");
     fetchManuscripts();
-    if (manuscript) router.push(`/manuscript/${manuscript.id}`);
+    if (manuscript) router.push(`/manuscript-v2/${manuscript.id}`);
   };
 
   const handleDelete = async (id: string, fileUrl: string) => {
@@ -368,7 +368,7 @@ export default function DashboardPage() {
                         onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
                       >
                         <div
-                          onClick={() => router.push(`/manuscript/${m.id}`)}
+                          onClick={() => router.push(`/manuscript-v2/${m.id}`)}
                           style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minWidth: 0, cursor: "pointer" }}
                         >
                           <div style={{

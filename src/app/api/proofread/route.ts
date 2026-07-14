@@ -183,6 +183,55 @@ function sliceBodyIntoSections(body: string, sections: any[]): { name: string; t
   return result;
 }
 
+
+// ---------- DETERMINISTIC SEGREGATION (no AI) — for v2 picker ----------
+function segregateTree(rawText: string): any {
+  const cleaned = (rawText || "").replace(/\*\*/g, "");
+  const rawLines = cleaned.split(/\n/);
+  const lines = rawLines.map((l, i) => ({ i, text: l.trim() })).filter(l => l.text.length > 0);
+  const reRunning = /^running\s*title[:\s]/i, reAbstract = /^\[?abstract\]?[:\s]?/i,
+    reKeywords = /^\[?keywords?\]?[:\s]?/i, reReferences = /^references?\s*$/i,
+    reHeading = /^(\d+)\.?\s+\S/, reSub = /^(\d+\.\d+)\.?\s+\S/, reSubSub = /^(\d+\.\d+\.\d+)\.?\s+\S/;
+  const typeFor = (name: string) => {
+    const n = name.toLowerCase();
+    if (n === "introduction") return "introduction";
+    if (/method|patients|material/.test(n)) return "methods";
+    if (/result/.test(n)) return "results";
+    if (/discuss/.test(n)) return "discussion";
+    if (/conclusion/.test(n)) return "conclusion";
+    return "other";
+  };
+  const front: any[] = [], body: any[] = []; let references: any = null;
+  const N = lines.length; let idx = 0;
+  if (idx < N) { front.push({ id: `n${lines[idx].i}`, kind: "title", text: lines[idx].text }); idx++; }
+  while (idx < N) {
+    const t = lines[idx].text;
+    if (reReferences.test(t) || reHeading.test(t)) break;
+    if (reRunning.test(t)) { front.push({ id: `n${lines[idx].i}`, kind: "running_title", text: t }); idx++; continue; }
+    if (reAbstract.test(t)) { front.push({ id: `n${lines[idx].i}`, kind: "abstract", text: t }); idx++; continue; }
+    if (reKeywords.test(t)) { front.push({ id: `n${lines[idx].i}`, kind: "keywords", text: t }); idx++; continue; }
+    break;
+  }
+  const intro: any[] = [];
+  while (idx < N) {
+    const t = lines[idx].text;
+    if (reHeading.test(t) || reReferences.test(t)) break;
+    intro.push({ id: `n${lines[idx].i}`, kind: "paragraph", text: t }); idx++;
+  }
+  if (intro.length) body.push({ id: intro[0].id, kind: "section", name: "Introduction", type: "introduction", children: intro });
+  let cur: any = null, sub: any = null;
+  const pushP = (n: any) => { if (sub) sub.children.push(n); else if (cur) cur.children.push(n); else body.push({ id: n.id, kind: "section", name: "(text)", type: "other", children: [n] }); };
+  while (idx < N) {
+    const ln = lines[idx], t = ln.text;
+    if (reReferences.test(t)) { references = { id: `n${ln.i}`, kind: "references", text: rawLines.slice(ln.i).join("\n").trim() }; break; }
+    if (reSubSub.test(t)) { sub = { id: `n${ln.i}`, kind: "subheading", level: 3, name: t, type: "sub", children: [] }; (cur ? cur.children : body).push(sub); idx++; continue; }
+    if (reSub.test(t)) { sub = { id: `n${ln.i}`, kind: "subheading", level: 2, name: t, type: "sub", children: [] }; (cur ? cur.children : body).push(sub); idx++; continue; }
+    if (reHeading.test(t)) { cur = { id: `n${ln.i}`, kind: "section", name: t, type: typeFor(t), children: [] }; sub = null; body.push(cur); idx++; continue; }
+    pushP({ id: `n${ln.i}`, kind: "paragraph", text: t }); idx++;
+  }
+  return { front, body, references };
+}
+
 // ---------- AI calls ----------
 
 async function detectStructure(condensed: string): Promise<any[]> {
@@ -298,7 +347,106 @@ KEYWORDS: ${keywordsText}`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { manuscriptText } = await request.json();
+    const reqBody = await request.json();
+    const mode: string = reqBody.mode || "";
+
+    // ===== MODE: SEGREGATE (deterministic, no AI) =====
+    if (mode === "segregate") {
+      const text: string = reqBody.manuscriptText || "";
+      if (!text) return NextResponse.json({ error: "No manuscript text provided" }, { status: 400 });
+      return NextResponse.json({ success: true, tree: segregateTree(text) });
+    }
+
+    // ===== MODE: EDIT ONE CHUNK (v2 grouped/section send) =====
+    if (mode === "editChunk") {
+      const chunk: string = reqBody.chunk || "";
+      const kind: string = reqBody.kind || "body"; // title | running_title | abstract | keywords | frontgroup | body
+      const sectionName: string = reqBody.sectionName || "Section";
+      const sectionType: string = reqBody.sectionType || "other";
+      if (!chunk.trim()) return NextResponse.json({ error: "No chunk text" }, { status: 400 });
+
+      // frontgroup = title + running title + abstract sent together
+      if (kind === "frontgroup") {
+        const lines = chunk.split("\n").map(l => l.trim()).filter(Boolean);
+        const titleText = lines[0] || "";
+        const rtLine = lines.find(l => /^running\s*title[:\s]/i.test(l)) || "";
+        const runningTitleText = rtLine.replace(/^running\s*title[:\s]*/i, "").trim();
+        const absLine = lines.find(l => /^\[?abstract\]?[:\s]?/i.test(l));
+        const absIdx = absLine ? lines.indexOf(absLine) : -1;
+        const abstractText = absIdx !== -1 ? lines.slice(absIdx).join(" ").replace(/^\[?abstract\]?[:\s]*/i, "").trim() : "";
+
+        const out: any[] = [];
+        const t = await editTitleAndRunningTitle(titleText, runningTitleText, chunk);
+        if (t.title) out.push({ original: t.title.original || titleText, edited: t.title.edited || titleText, changed: t.title.changed ?? true, section: "title" });
+        if (t.runningTitle) out.push({ original: t.runningTitle.original || runningTitleText, edited: t.runningTitle.edited || runningTitleText, changed: t.runningTitle.changed ?? true, section: "running_title" });
+        if (abstractText) {
+          const abs = await editSection(abstractText, "Abstract", "abstract");
+          const editedParts = abs.sentences.map((s: any) => (s.edited || s.original || "").replace(/\*\*/g, "").trim()).filter(Boolean);
+          const deduped: string[] = [];
+          for (const p of editedParts) if (!deduped.includes(p)) deduped.push(p);
+          const combined = deduped.join(" ");
+          const origLabels = detectAbstractLabelsInOrder(abstractText);
+          let labeled: { label: string; text: string }[] | null = separateAbstractLabels(combined);
+          if ((!labeled || labeled.length < 2) && origLabels.length >= 2) labeled = reattachLabels(combined, origLabels);
+          if (labeled && labeled.length >= 2) {
+            labeled.forEach((sec, i) => out.push({ original: i === 0 ? abstractText : "", edited: `**${sec.label}:** ${sec.text}`, changed: true, section: "abstract", isLabeledPart: true }));
+          } else {
+            out.push({ original: abstractText, edited: combined || abstractText, changed: combined !== abstractText, section: "abstract" });
+          }
+        }
+        return NextResponse.json({ success: true, result: { sentences: out, summary: {} } });
+      }
+
+      if (kind === "title" || kind === "running_title") {
+        const t = await editTitleAndRunningTitle(kind === "title" ? chunk : "", kind === "running_title" ? chunk : "", reqBody.context || chunk);
+        const out: any[] = [];
+        if (kind === "title" && t.title) out.push({ original: t.title.original || chunk, edited: t.title.edited || chunk, changed: t.title.changed ?? true, section: "title" });
+        if (kind === "running_title" && t.runningTitle) out.push({ original: t.runningTitle.original || chunk, edited: t.runningTitle.edited || chunk, changed: t.runningTitle.changed ?? true, section: "running_title" });
+        return NextResponse.json({ success: true, result: { sentences: out, summary: {} } });
+      }
+
+      if (kind === "keywords") {
+        const kw = await editKeywords(chunk);
+        const out = kw ? [{ original: kw.original || chunk, edited: kw.edited || chunk, changed: kw.changed ?? true, section: "keywords" }] : [];
+        return NextResponse.json({ success: true, result: { sentences: out, summary: {} } });
+      }
+
+      if (kind === "abstract") {
+        const abs = await editSection(chunk, "Abstract", "abstract");
+        const editedParts = abs.sentences.map((s: any) => (s.edited || s.original || "").replace(/\*\*/g, "").trim()).filter(Boolean);
+        const deduped: string[] = [];
+        for (const p of editedParts) if (!deduped.includes(p)) deduped.push(p);
+        const combined = deduped.join(" ");
+        const origLabels = detectAbstractLabelsInOrder(chunk);
+        let labeled: { label: string; text: string }[] | null = separateAbstractLabels(combined);
+        if ((!labeled || labeled.length < 2) && origLabels.length >= 2) labeled = reattachLabels(combined, origLabels);
+        const out: any[] = [];
+        if (labeled && labeled.length >= 2) labeled.forEach((sec, i) => out.push({ original: i === 0 ? chunk : "", edited: `**${sec.label}:** ${sec.text}`, changed: true, section: "abstract", isLabeledPart: true }));
+        else out.push({ original: chunk, edited: combined || chunk, changed: combined !== chunk, section: "abstract" });
+        return NextResponse.json({ success: true, result: { sentences: out, summary: abs.summary } });
+      }
+
+      // body chunk
+      const subChunks = wordChunk(chunk, 1000);
+      const out: any[] = [];
+      const sum: any = { grammar_corrections: 0, apa_corrections: 0, terminology_corrections: 0, consistency_improvements: 0, style_improvements: 0, total_edits: 0, key_changes: [] };
+      for (let c = 0; c < subChunks.length; c++) {
+        const edited = await editSection(subChunks[c], sectionName, sectionType);
+        edited.sentences.forEach((s: any) => { s.section = "body"; });
+        out.push(...edited.sentences);
+        const s = edited.summary || {};
+        sum.grammar_corrections += s.grammar_corrections || 0; sum.apa_corrections += s.apa_corrections || 0;
+        sum.terminology_corrections += s.terminology_corrections || 0; sum.consistency_improvements += s.consistency_improvements || 0;
+        sum.style_improvements += s.style_improvements || 0; sum.total_edits += s.total_edits || 0;
+        if (s.key_changes) sum.key_changes.push(...s.key_changes);
+        if (subChunks.length > 1 && c < subChunks.length - 1) await new Promise(r => setTimeout(r, 400));
+      }
+      sum.key_changes = [...new Set(sum.key_changes)].slice(0, 10);
+      return NextResponse.json({ success: true, result: { sentences: out, summary: sum } });
+    }
+
+    // ===== LEGACY: FULL ONE-SHOT PIPELINE (original page) =====
+    const { manuscriptText } = reqBody;
     if (!manuscriptText) {
       return NextResponse.json({ error: "No manuscript text provided" }, { status: 400 });
     }
