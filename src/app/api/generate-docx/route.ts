@@ -446,11 +446,13 @@ async function generateDocxBuffer(
       section === "title" || section === "running_title";
 
     // Keep bold for: title, headings, subheadings. Strip bold for normal body/abstract/keywords.
-    const keepBold = isTitleOrHeadingSection || isHeading || isSubheading || paraIsBold;
-    if (!keepBold) {
-      rPr = stripBoldFromRPr(rPr);
-    } else {
+    // Preserve bold: keep it if original para was bold OR it looks like a heading
+    // NEVER strip bold from originally-bold paragraphs (preserves heading formatting)
+    const keepBold = isTitleOrHeadingSection || isHeading || isSubheading || paraIsBold || isParagraphBold(para);
+    if (keepBold) {
       rPr = addBoldToRPr(rPr);
+    } else {
+      rPr = stripBoldFromRPr(rPr);
     }
 
     const pPr = getParagraphProps(para);

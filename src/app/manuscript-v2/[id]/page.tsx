@@ -329,7 +329,9 @@ export default function ManuscriptPage() {
   const [rawBodyText, setRawBodyText] = useState<string>("");
 
   // ===== V2 state: phase (segregate grouped-send  |  review = existing completed view) =====
-  const [v2Phase, setV2Phase] = useState<"idle" | "segregate" | "review">("idle");
+  const [v2Phase, setV2Phase] = useState<"idle" | "label" | "segregate" | "review">("idle");
+  const [v2RawBlocks, setV2RawBlocks] = useState<string[]>([]); // raw paragraphs for labeling
+  const [v2Labels, setV2Labels] = useState<Record<number, string>>({}); // blockIndex -> label
   const [v2Tree, setV2Tree] = useState<any>(null);
   const [v2Selected, setV2Selected] = useState<Set<string>>(new Set());
   const [v2Sending, setV2Sending] = useState<Set<string>>(new Set());
@@ -361,7 +363,9 @@ export default function ManuscriptPage() {
       if (rawText) {
         setRawSections(parseDocumentSections(rawText));
         setRawBodyText(rawText);
-        setV2Tree(segregateTree(rawText));
+        // restore raw blocks for labeling
+        const blocks = rawText.split(/\n\s*\n/).map((b: string) => b.trim()).filter((b: string) => b.length > 0);
+        setV2RawBlocks(blocks);
       }
     } catch {
       sessionStorage.removeItem(`result_${params.id}`);
@@ -449,9 +453,16 @@ export default function ManuscriptPage() {
       sessionStorage.setItem(`text_${params.id}`, manuscriptText);
       setRawSections(parseDocumentSections(manuscriptText));
       setRawBodyText(manuscriptText);
-      setV2Tree(segregateTree(manuscriptText));
-      setV2Phase("segregate");
       if (!result) setResult({ sentences: [], summary: null });
+
+      // Split into raw blocks for manual labeling (paragraph-wise)
+      const blocks = manuscriptText
+        .split(/\n\s*\n/)
+        .map((b: string) => b.trim())
+        .filter((b: string) => b.length > 0);
+      setV2RawBlocks(blocks);
+      setV2Labels({});
+      setV2Phase("label"); // go to manual labeling, NOT auto-segregate
     } catch (error: any) {
       console.error("Segregation failed:", error);
     }
@@ -583,6 +594,111 @@ export default function ManuscriptPage() {
   };
 
   // enter the existing completed review view
+  // Build the v2Tree from manually assigned labels
+  const buildTreeFromLabels = () => {
+    // collect all blocks per label, concatenate when multiple blocks share same label
+    const frontMap: Record<string, string[]> = {};
+    const bodyTexts: string[] = [];
+    let referencesText = "";
+
+    v2RawBlocks.forEach((block, idx) => {
+      const label = v2Labels[idx];
+      if (!label || label === "skip") return;
+      if (label === "references") { referencesText += (referencesText ? "\n\n" : "") + block; return; }
+      if (label === "body") { bodyTexts.push(block); return; }
+      // front matter — collect multiple blocks per kind
+      if (!frontMap[label]) frontMap[label] = [];
+      // skip pure heading words (single word or very short lines like "Abstract", "Introduction")
+      const isHeadingWord = block.split(/\s+/).length <= 2 && block.length < 20;
+      if (!isHeadingWord) frontMap[label].push(block);
+      else if (frontMap[label].length === 0) frontMap[label].push(block); // keep if it's the only one
+    });
+
+    // build front array from map, joining multiple blocks
+    const kindOrder = ["title", "running_title", "abstract", "keywords"];
+    const front: any[] = [];
+    kindOrder.forEach((kind, i) => {
+      const blocks = frontMap[kind];
+      if (!blocks || blocks.length === 0) return;
+      const text = blocks.join(" ").trim();
+      front.push({ id: `n${kind}`, kind, text });
+    });
+
+    // Auto-detect body sections from body text
+    // Supports BOTH numbered headings (1., 1.1) AND plain text headings (Methods, Introduction, etc.)
+    const bodyFull = bodyTexts.join("\n\n");
+    const rawLines = bodyFull.split(/\n/);
+    const lines = rawLines.map((l, i) => ({ i, text: l.replace(/\*\*/g,"").trim() })).filter(l => l.text.length > 0);
+    const reHeading = /^(\d+)\.?\s+\S/, reSub = /^(\d+\.\d+)\.?\s+\S/, reSubSub = /^(\d+\.\d+\.\d+)\.?\s+\S/;
+    // Plain-text heading: ≤5 words, no sentence-ending punctuation, matches known section names
+    const knownHeadings = /^(introduction|background|methods?|materials?|patients?|results?|discussion|conclusions?|limitations?|data\s+source|patient\s+population|data\s+extraction|outcome\s+data|statistical\s+analysis|study\s+design|study\s+population|ethics|acknowledgements?|funding|conflicts?\s+of\s+interest|abbreviations?|supplementary|appendix)/i;
+    const isPlainHeading = (t: string) => {
+      const words = t.split(/\s+/).length;
+      const noEndPunct = !/[.!?;]$/.test(t);
+      const short = words <= 5;
+      return short && noEndPunct && (knownHeadings.test(t) || (words <= 3 && /^[A-Z]/.test(t)));
+    };
+    const typeFor = (name: string) => {
+      const n = name.toLowerCase();
+      if (/method|patients|material|data\s+source|data\s+extract|statistical|study\s+design|study\s+pop|patient\s+pop|outcome/.test(n)) return "methods";
+      if (/result/.test(n)) return "results";
+      if (/discuss/.test(n)) return "discussion";
+      if (/conclusion|limitation/.test(n)) return "conclusion";
+      if (/introduction|background/.test(n)) return "introduction";
+      return "other";
+    };
+    const body: any[] = [];
+    let cur: any = null, sub: any = null;
+    const pushP = (n: any) => {
+      if (sub) sub.children.push(n);
+      else if (cur) cur.children.push(n);
+      else {
+        // no current section — create intro
+        const intro = body.find((s:any) => s.name === "Introduction");
+        if (intro) intro.children.push(n);
+        else body.push({ id: `nb_intro_${n.id}`, kind: "section", name: "Introduction", type: "introduction", children: [n] });
+      }
+    };
+    lines.forEach((ln) => {
+      const t = ln.text;
+      if (reSubSub.test(t)) { sub = { id: `nb${ln.i}`, kind: "subheading", level: 3, name: t, type: typeFor(t), children: [] }; (cur ? cur.children : body).push(sub); return; }
+      if (reSub.test(t)) { sub = { id: `nb${ln.i}`, kind: "subheading", level: 2, name: t, type: typeFor(t), children: [] }; (cur ? cur.children : body).push(sub); return; }
+      if (reHeading.test(t)) { cur = { id: `nb${ln.i}`, kind: "section", name: t, type: typeFor(t), children: [] }; sub = null; body.push(cur); return; }
+      // plain text heading detection
+      if (isPlainHeading(t)) {
+        // top-level known section → new section; otherwise subheading under current
+        const isTopLevel = /^(introduction|background|methods?|materials?|results?|discussion|conclusions?|limitations?)$/i.test(t.trim());
+        if (isTopLevel || !cur) {
+          cur = { id: `nb${ln.i}`, kind: "section", name: t, type: typeFor(t), children: [] };
+          sub = null; body.push(cur);
+        } else {
+          sub = { id: `nb${ln.i}`, kind: "subheading", level: 2, name: t, type: typeFor(t), children: [] };
+          cur.children.push(sub);
+        }
+        return;
+      }
+      pushP({ id: `nb${ln.i}`, kind: "paragraph", text: t });
+    });
+
+    // If no sections found, treat all body blocks as flat paragraphs under Introduction
+    if (body.length === 0 && bodyTexts.length > 0) {
+      const children = bodyTexts.map((t, i) => ({ id: `nb${i}`, kind: "paragraph", text: t }));
+      body.push({ id: "nb_intro", kind: "section", name: "Introduction", type: "introduction", children });
+    }
+
+    const references = referencesText
+      ? { id: "nref", kind: "references", text: referencesText }
+      : null;
+
+    return { front, body, references };
+  };
+
+  const confirmLabeling = () => {
+    const tree = buildTreeFromLabels();
+    setV2Tree(tree);
+    setV2Phase("segregate");
+  };
+
   const v2OpenReview = () => {
     setManuscript((prev: any) => ({ ...prev, status: "completed" }));
     setV2Phase("review");
@@ -1261,6 +1377,77 @@ export default function ManuscriptPage() {
             )}
 
             {/* ===== V2 PHASE 1: grouped send ===== */}
+            {/* ===== STEP 2: MANUAL LABELING ===== */}
+            {v2Phase === "label" && v2RawBlocks.length > 0 && (() => {
+              const LABELS = [
+                { key: "title", label: "Title", color: "#6366f1" },
+                { key: "running_title", label: "Running Title", color: "#8b5cf6" },
+                { key: "abstract", label: "Abstract", color: "#06b6d4" },
+                { key: "keywords", label: "Keywords", color: "#10b981" },
+                { key: "body", label: "Body", color: "var(--accent)" },
+                { key: "references", label: "References", color: "#f59e0b" },
+                { key: "skip", label: "Skip", color: "#6b7280" },
+              ];
+              const assigned = Object.keys(v2Labels).length;
+              const hasTitle = Object.values(v2Labels).includes("title");
+              const hasAbstract = Object.values(v2Labels).includes("abstract");
+              const hasBody = Object.values(v2Labels).includes("body");
+              const canConfirm = hasTitle && hasAbstract && hasBody;
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <div style={{ padding: "10px 14px", borderRadius: "8px", marginBottom: "12px", backgroundColor: "var(--accent-light)", border: "1px solid var(--accent-border)", fontSize: "12px", color: "var(--accent)", fontWeight: 500 }}>
+                    Label each block below: what part of the document is it? Once Title, Abstract and Body are labeled, click <b>Confirm</b>.
+                  </div>
+
+                  {v2RawBlocks.map((block, idx) => {
+                    const assigned = v2Labels[idx];
+                    const labelInfo = LABELS.find(l => l.key === assigned);
+                    return (
+                      <div key={idx} style={{ marginBottom: "10px", padding: "10px 12px", borderRadius: "8px", backgroundColor: "var(--bg-card)", border: `1px solid ${labelInfo ? labelInfo.color : "var(--border)"}`, transition: "border-color 0.2s" }}>
+                        {/* label buttons */}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
+                          {LABELS.map(l => (
+                            <button key={l.key} onClick={() => setV2Labels(prev => ({ ...prev, [idx]: l.key }))}
+                              style={{ fontSize: "11px", fontWeight: 500, padding: "3px 10px", borderRadius: "6px", border: `1px solid ${l.color}`, backgroundColor: assigned === l.key ? l.color : "transparent", color: assigned === l.key ? "#fff" : l.color, cursor: "pointer", transition: "all 0.15s" }}>
+                              {l.label}
+                            </button>
+                          ))}
+                          {assigned && (
+                            <button onClick={() => setV2Labels(prev => { const n = { ...prev }; delete n[idx]; return n; })}
+                              style={{ fontSize: "11px", padding: "3px 8px", borderRadius: "6px", border: "1px solid var(--border)", backgroundColor: "transparent", color: "var(--text-muted)", cursor: "pointer" }}>✕</button>
+                          )}
+                        </div>
+                        {/* block text preview */}
+                        <div style={{ fontSize: "12px", lineHeight: 1.6, color: labelInfo ? "var(--text-primary)" : "var(--text-muted)", wordBreak: "break-word", maxHeight: "120px", overflowY: "auto", whiteSpace: "pre-wrap" }}>
+                          {block.length > 400 ? block.slice(0, 400) + "…" : block}
+                        </div>
+                        {assigned && (
+                          <div style={{ marginTop: "6px", fontSize: "10px", fontWeight: 600, color: labelInfo?.color, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                            ✓ {labelInfo?.label}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  <div style={{ position: "sticky", bottom: 0, padding: "12px 0", backgroundColor: "var(--bg)", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: "12px", marginTop: "8px" }}>
+                    <button onClick={confirmLabeling} disabled={!canConfirm}
+                      style={{ fontSize: "13px", fontWeight: 600, padding: "10px 28px", borderRadius: "8px", border: "none", backgroundColor: canConfirm ? "#22c55e" : "var(--border)", color: "#fff", cursor: canConfirm ? "pointer" : "not-allowed" }}>
+                      ✓ Confirm labeling
+                    </button>
+                    {!canConfirm && (
+                      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                        Need: {!hasTitle ? "Title " : ""}{!hasAbstract ? "Abstract " : ""}{!hasBody ? "Body" : ""}
+                      </span>
+                    )}
+                    <span style={{ fontSize: "12px", color: "var(--text-muted)", marginLeft: "auto" }}>
+                      {Object.keys(v2Labels).length}/{v2RawBlocks.length} blocks labeled
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+
             {v2Phase === "segregate" && v2Tree && (() => {
               const fm = (k: string) => v2Tree.front.find((f: any) => f.kind === k);
               const titleN = fm("title"), rtN = fm("running_title"), absN = fm("abstract"), kwN = fm("keywords");

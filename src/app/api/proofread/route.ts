@@ -371,9 +371,20 @@ export async function POST(request: NextRequest) {
         const titleText = lines[0] || "";
         const rtLine = lines.find(l => /^running\s*title[:\s]/i.test(l)) || "";
         const runningTitleText = rtLine.replace(/^running\s*title[:\s]*/i, "").trim();
+        // Find abstract: first try [Abstract] prefix, then fall back to content after running title
         const absLine = lines.find(l => /^\[?abstract\]?[:\s]?/i.test(l));
-        const absIdx = absLine ? lines.indexOf(absLine) : -1;
-        const abstractText = absIdx !== -1 ? lines.slice(absIdx).join(" ").replace(/^\[?abstract\]?[:\s]*/i, "").trim() : "";
+        let abstractText = "";
+        if (absLine) {
+          const absIdx = lines.indexOf(absLine);
+          abstractText = lines.slice(absIdx).join(" ").replace(/^\[?abstract\]?[:\s]*/i, "").trim();
+        } else {
+          // No [Abstract] prefix - find where abstract content starts (after title and running title)
+          const rtIdx = rtLine ? lines.indexOf(rtLine) : 0;
+          const afterHeader = lines.slice(rtIdx + 1);
+          // Skip any single-word heading like "Abstract"
+          const contentStart = afterHeader.findIndex(l => l.split(/\s+/).length > 5);
+          abstractText = contentStart >= 0 ? afterHeader.slice(contentStart).join(" ").trim() : afterHeader.join(" ").trim();
+        }
 
         const out: any[] = [];
         const t = await editTitleAndRunningTitle(titleText, runningTitleText, chunk);
