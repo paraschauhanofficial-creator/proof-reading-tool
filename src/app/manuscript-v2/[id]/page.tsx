@@ -875,10 +875,15 @@ export default function ManuscriptPage() {
 
   // Abstract — combine ALL abstract sentences
   const abstractOriginal = abstractSentences.length > 0
-    ? abstractSentences.map((s: any) => stripLabel(s.original)).join(" ")
+    ? abstractSentences.filter((s: any) => s.original && s.original.trim()).map((s: any) => stripLabel(s.original)).join(" ")
     : rawSections?.abstract || "";
+  // For abstract edited: preserve **Label:** markers so Objective/Methods/Results/Conclusion show
   const abstractEdited = abstractSentences.length > 0
-    ? abstractSentences.map((s: any) => stripLabel(s.edited)).join(" ")
+    ? abstractSentences.map((s: any) => {
+        const e = (s.edited || s.original || "").replace(/\*\*/g, "").trim();
+        // if this sentence has a label prefix (e.g. "Objective: ..."), keep it
+        return e;
+      }).filter(Boolean).join(" ")
     : "";
   const abstractChanged = abstractSentences.some((s: any) => s.changed);
 
@@ -1463,11 +1468,21 @@ export default function ManuscriptPage() {
                 // For abstract: collect all labeled parts and show original once at top + all edited parts
                 if (section === "abstract") {
                   const firstOrig = edits.find((s: any) => s.original && s.original.trim().length > 0);
-                  const allEdited = edits.map((s: any) => stripLabel(s.edited || "")).filter(Boolean).join(" ");
+                  // Render each labeled part separately so Objective/Methods/Results/Conclusion show
+                  const labeledParts = edits.filter((s: any) => s.isLabeledPart || s.edited);
+                  const hasLabels = labeledParts.some((s: any) => /^(Objective|Methods?|Results?|Conclusions?|Background|Aims?|Purpose)[:\s]/i.test((s.edited || "").replace(/\*\*/g, "")));
                   return (
                     <div style={{ marginBottom: "3px" }}>
                       {firstOrig && <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(239,68,68,0.07)", borderLeft: "2px solid #ef4444", color: "#f87171", textDecoration: "line-through", marginBottom: "3px", wordBreak: "break-word" }}>{firstOrig.original}</div>}
-                      <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(34,197,94,0.07)", borderLeft: "2px solid #22c55e", color: "#4ade80", wordBreak: "break-word" }}>{allEdited}</div>
+                      <div style={{ fontSize: "13px", lineHeight: 1.7, padding: "8px 12px", borderRadius: "6px", backgroundColor: "rgba(34,197,94,0.07)", borderLeft: "2px solid #22c55e", color: "#4ade80", wordBreak: "break-word" }}>
+                        {hasLabels
+                          ? labeledParts.map((s: any, i: number) => {
+                              const text = (s.edited || "").replace(/\*\*/g, "").trim();
+                              return <div key={i} style={{ marginBottom: i < labeledParts.length - 1 ? "6px" : 0 }}>{text}</div>;
+                            })
+                          : <span>{edits.map((s: any) => (s.edited || "").replace(/\*\*/g, "").trim()).filter(Boolean).join(" ")}</span>
+                        }
+                      </div>
                     </div>
                   );
                 }
@@ -1516,7 +1531,7 @@ export default function ManuscriptPage() {
                       <span style={{ fontSize: isSection ? "14px" : "13px", fontWeight: 600, color: isSection ? "var(--text-primary)" : "var(--text-secondary)" }}>{node.name}{done ? " ✓" : ""}</span>
                       <button onClick={() => v2SendNode(node)} disabled={isSending} style={{ fontSize: "11px", fontWeight: 500, padding: "3px 10px", borderRadius: "6px", border: "none", backgroundColor: "var(--accent)", color: "#fff", cursor: isSending ? "wait" : "pointer", opacity: isSending ? 0.6 : 1 }}>{isSending ? "Editing…" : done ? "↻ Re-send" : "↳ Send for edit"}</button>
                     </div>
-                    {node.name && node.name !== "Introduction" && node.name !== "(text)" && (v2FindEdits(node.name).length ? redGreen(node.name) : rawBox(node.name, true))}
+                    {node.kind === "subheading" && node.name && (v2FindEdits(node.name).length ? redGreen(node.name) : rawBox(node.name, true))}
                     <div>{(node.children || []).map((c: any) => renderBodyNode(c, depth + 1))}</div>
                   </div>
                 );
@@ -1533,9 +1548,18 @@ export default function ManuscriptPage() {
                       <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-primary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Title · Running Title · Abstract{frontDone ? " ✓" : ""}</span>
                       <button onClick={() => v2SendNode(frontGroupNode)} disabled={frontSending} style={{ fontSize: "11px", fontWeight: 500, padding: "3px 12px", borderRadius: "6px", border: "none", backgroundColor: "var(--accent)", color: "#fff", cursor: frontSending ? "wait" : "pointer", opacity: frontSending ? 0.6 : 1 }}>{frontSending ? "Editing…" : frontDone ? "↻ Re-send" : "↳ Send all three"}</button>
                     </div>
-                    {titleN && (v2FindEdits(titleN.text, "title").length ? redGreen(titleN.text, "title") : rawBox(titleN.text, true))}
-                    {rtN && (v2FindEdits(rtN.text, "running_title").length ? redGreen(rtN.text, "running_title") : rawBox(rtN.text))}
-                    {absN && (v2FindEdits(absN.text, "abstract").length ? redGreen(absN.text, "abstract") : rawBox(absN.text))}
+                    <div style={{ marginBottom: "4px" }}>
+                      <p style={{ fontSize: "10px", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.6px", margin: "6px 0 3px" }}>Title</p>
+                      {titleN && (v2FindEdits(titleN.text, "title").length ? redGreen(titleN.text, "title") : rawBox(titleN.text, true))}
+                    </div>
+                    <div style={{ marginBottom: "4px" }}>
+                      <p style={{ fontSize: "10px", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.6px", margin: "6px 0 3px" }}>Running Title</p>
+                      {rtN && (v2FindEdits(rtN.text, "running_title").length ? redGreen(rtN.text, "running_title") : rawBox(rtN.text))}
+                    </div>
+                    <div>
+                      <p style={{ fontSize: "10px", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.6px", margin: "6px 0 3px" }}>Abstract</p>
+                      {absN && (v2FindEdits(absN.text, "abstract").length ? redGreen(absN.text, "abstract") : rawBox(absN.text))}
+                    </div>
                   </div>
 
                   {/* SECTION 2: keywords */}
@@ -1545,6 +1569,7 @@ export default function ManuscriptPage() {
                         <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-primary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Keywords{kwDone ? " ✓" : ""}</span>
                         <button onClick={() => v2SendNode(kwN)} disabled={kwSending} style={{ fontSize: "11px", fontWeight: 500, padding: "3px 12px", borderRadius: "6px", border: "none", backgroundColor: "var(--accent)", color: "#fff", cursor: kwSending ? "wait" : "pointer", opacity: kwSending ? 0.6 : 1 }}>{kwSending ? "Editing…" : kwDone ? "↻ Re-send" : "↳ Send (alphabetize)"}</button>
                       </div>
+                      <p style={{ fontSize: "10px", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.6px", margin: "6px 0 3px" }}>Keywords</p>
                       {v2FindEdits(kwN.text, "keywords").length ? redGreen(kwN.text, "keywords") : rawBox(kwN.text)}
                     </div>
                   )}
@@ -1669,7 +1694,20 @@ export default function ManuscriptPage() {
                   <p style={SECTION_LABEL}>Abstract</p>
                   {abstractChanged ? (
                     viewMode === "compare" ? renderCompare(abstractOriginal, abstractEdited) : (
-                      <><div style={ORIGINAL}>{abstractOriginal}</div>{renderEditableGreen("abstract", 0, abstractEdited, {}, abstractOriginal)}</>
+                      <>
+                        <div style={ORIGINAL}>{abstractOriginal}</div>
+                        {abstractSentences.some((s: any) => s.isLabeledPart) ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                            {abstractSentences.filter((s: any) => s.edited).map((s: any, i: number) => (
+                              <div key={i} style={{ ...EDITED as any }}>
+                                {(s.edited || "").replace(/\*\*/g, "").trim()}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          renderEditableGreen("abstract", 0, abstractEdited, {}, abstractOriginal)
+                        )}
+                      </>
                     )
                   ) : (
                     <div style={UNCHANGED}>{abstractOriginal}</div>
